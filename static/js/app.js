@@ -9,6 +9,28 @@ document.addEventListener('DOMContentLoaded', () => {
             applyContextChange();
         }
     });
+
+    // --- Theme Logic ---
+    const themeBtn = document.getElementById('theme-toggle');
+    const html = document.documentElement;
+
+    // Load saved
+    const savedTheme = localStorage.getItem('theme') || 'dark';
+    html.setAttribute('data-theme', savedTheme);
+    updateThemeIcon(savedTheme);
+
+    themeBtn.addEventListener('click', () => {
+        const current = html.getAttribute('data-theme');
+        const next = current === 'dark' ? 'light' : 'dark';
+        html.setAttribute('data-theme', next);
+        localStorage.setItem('theme', next);
+        updateThemeIcon(next);
+    });
+
+    function updateThemeIcon(theme) {
+        // If dark, show Sun to switch to light. If light, show Moon to switch to dark.
+        themeBtn.textContent = theme === 'dark' ? '☀' : '☾'; 
+    }
 });
 
 let currentConfig = {};

@@ -1,6 +1,6 @@
 :root {
-    /* Color Palette - Modern Dark (Zinc-based) */
-    --bg-app: #18191a;       /* Dark Gray (lighter than black) */
+    /* Base Variables (Default/Dark) */
+    --bg-app: #18191a;       /* Dark Gray */
     --bg-card: #242526;      /* Lighter gray for cards */
     --bg-hover: #3a3b3c;     /* Lighter hover */
     --bg-input: #3a3b3c;     /* Input background */
@@ -32,6 +32,50 @@
     
     --font-ui: 'Inter', system-ui, -apple-system, sans-serif;
     --font-mono: 'JetBrains Mono', monospace;
+
+    /* Theme Toggle Accent */
+    --theme-toggle-color: #38bdf8; /* Sky 400 */
+    
+    /* Logo Gradient */
+    --logo-gradient: linear-gradient(135deg, #fff 0%, #a1a1aa 100%);
+}
+
+[data-theme="light"] {
+    --bg-app: #f3f4f6;       /* Zinc 100 */
+    --bg-card: #ffffff;      /* White */
+    --bg-hover: #f4f4f5;     /* Zinc 100 */
+    --bg-input: #ffffff;
+    
+    --border: #e4e4e7;       /* Zinc 200 */
+    --border-active: #d4d4d8; /* Zinc 300 */
+    
+    --text-main: #18191b;    /* gray-900 */
+    --text-muted: #71717a;   /* Zinc 500 */
+    
+    --shadow-card: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+    
+    /* Softer Button Colors for Light Mode */
+    --primary: #6366f1;      /* Indigo 500 (Softer than pure blue) */
+    --primary-hover: #4f46e5;
+    
+    --purple: #a78bfa;       /* Violet 400 (Pastel purple) */
+    --purple-hover: #8b5cf6;
+    
+    --danger: #f87171;       /* Red 400 (Softer red) */
+    --danger-hover: #ef4444;
+
+    /* Dark logo for light bg */
+    --logo-gradient: linear-gradient(135deg, #18181b 0%, #52525b 100%);
+}
+
+[data-theme="light"] input[type="number"] {
+    color: var(--text-main);
+}
+[data-theme="light"] .logs-container {
+    background: #1e1e1e; /* Keep logs dark for better readability usually, or switch? */
+    background: #f9fafb;
+    color: #374151;
+    border: 1px solid var(--border);
 }
 
 * {
@@ -74,7 +118,7 @@ body {
     font-weight: 700;
     font-size: 18px;
     letter-spacing: -0.5px;
-    background: linear-gradient(135deg, #fff 0%, #a1a1aa 100%);
+    background: var(--logo-gradient);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
 }
@@ -97,6 +141,28 @@ body {
 .status-indicator.on {
     background-color: var(--success);
     box-shadow: 0 0 10px rgba(16, 185, 129, 0.4);
+}
+
+#theme-toggle {
+    background: transparent;
+    border: none;
+    color: var(--theme-toggle-color);
+    font-size: 24px;
+    cursor: pointer;
+    padding: 0 12px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.2s cubic-bezier(0.18, 0.89, 0.32, 1.28);
+}
+
+#theme-toggle:hover {
+    transform: rotate(15deg) scale(1.1);
+}
+
+#theme-toggle:active {
+    transform: scale(0.95);
 }
 
 /* --- Layout --- */

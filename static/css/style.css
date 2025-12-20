@@ -540,3 +540,56 @@ input[type="number"]:focus {
 
 /* Utilities */
 .hidden { display: none !important; }
+
+/* Mobile Responsive */
+@media (max-width: 768px) {
+    body {
+        height: auto;
+        overflow: auto;
+    }
+
+    .app-container {
+        height: auto;
+        overflow: visible;
+    }
+
+    .main-content {
+        flex-direction: column;
+        height: auto;
+        overflow: visible;
+        padding: 16px;
+        gap: 16px;
+    }
+
+    .models-panel {
+        width: 100%;
+        height: 50vh; /* Takes half screen, user can scroll inside */
+        min-height: 300px;
+    }
+
+    .right-column {
+        width: 100%;
+        flex: none;
+        gap: 16px;
+    }
+
+    .dashboard-grid {
+        grid-template-columns: 1fr; /* Stack dashboard items */
+        padding: 16px;
+    }
+
+    .stats-column {
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+        padding-right: 0;
+        padding-bottom: 20px;
+    }
+
+    .logs-panel {
+        height: 400px; /* Fixed height for logs on mobile */
+    }
+
+    .panel-header h2 {
+        font-size: 16px;
+    }
+}

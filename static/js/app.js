@@ -159,7 +159,7 @@ function startPolling() {
         } catch (e) {
             console.log("Status check failed", e);
         }
-    }, 1000);
+    }, 5000);
 
     // Logs Poll
     setInterval(async () => {
@@ -182,7 +182,7 @@ function startPolling() {
         } catch (e) {
             // Ignore
         }
-    }, 1000);
+    }, 5000);
 }
 
 function updateStatusDisplay(status) {

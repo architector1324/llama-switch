@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Llama Switch</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=2">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body class="dark-theme">
+    <div class="app-container">
+        <header class="header">
+            <div class="logo">llama-switch</div>
+            <nav class="nav">
+                <!-- <a href="#" class="active">Models</a> -->
+                <div class="status-indicator" id="global-status"></div>
+            </nav>
+        </header>
+
+        <main class="main-content">
+            <!-- Left Panel: Models -->
+            <section class="panel models-panel">
+                <div class="panel-header">
+                    <h2>Models</h2>
+                    <div class="actions">
+                        <button class="btn btn-danger" onclick="stopServer()">Stop All</button>
+                    </div>
+                </div>
+                <div class="model-list-header">
+                    <span>Model ID</span>
+                    <span>Action</span>
+                </div>
+                <div id="model-list" class="model-list">
+                    <!-- Models injected here -->
+                    <div class="loading">Loading configuration...</div>
+                </div>
+            </section>
+
+            <!-- Right Panel: Controls & Logs -->
+            <section class="right-column">
+                <!-- Controls Card -->
+                <div class="panel controls-panel">
+                    <div class="panel-header">
+                        <h2>Dashboard</h2>
+                    </div>
+                    
+                    <div class="dashboard-grid">
+                        <!-- Left Column: Stats -->
+                        <div class="dash-column stats-column">
+                            <div class="stat-row">
+                                <div class="stat-box">
+                                    <span class="label">Gen Speed</span>
+                                    <span class="value" id="stat-gen-speed">-</span>
+                                </div>
+                                <div class="stat-box">
+                                    <span class="label">Prompt Speed</span>
+                                    <span class="value" id="stat-prompt-speed">-</span>
+                                </div>
+                            </div>
+                            <div class="stat-row">
+                                <div class="stat-box">
+                                    <span class="label">Ctx Usage</span>
+                                    <span class="value" id="stat-ctx-usage">-</span>
+                                </div>
+                                <div class="stat-box">
+                                    <span class="label">Total Tokens</span>
+                                    <span class="value" id="stat-total-tokens">-</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Right Column: Settings & Status -->
+                        <div class="dash-column settings-column">
+                            <div class="control-group compact-group">
+                                <label for="ctx-input">Context Window</label>
+                                <div class="input-wrapper">
+                                    <input type="number" id="ctx-input" value="4096" min="512" step="512">
+                                    <button id="apply-ctx-btn" class="btn btn-primary btn-sm" onclick="applyContextChange()">Apply</button>
+                                </div>
+                            </div>
+                            
+                            <div class="stat-box status-box">
+                                <span class="label">Current Model</span>
+                                <span class="value primary-text" id="current-model">-</span>
+                                
+                                <div class="status-row">
+                                    <span id="status-text">Stopped</span>
+                                </div>
+                                <a id="webui-btn" href="#" target="_blank" class="btn btn-primary btn-sm" style="display: none;">Open WebUI</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Logs Card -->
+                <div class="panel logs-panel">
+                    <div class="panel-header">
+                        <h2>Upstream Logs</h2>
+                        <div class="actions">
+                            <button class="icon-btn" onclick="clearLogs()">Clear</button>
+                            <button class="icon-btn" onclick="scrollToBottom()">⬇</button>
+                        </div>
+                    </div>
+                    <div id="logs-container" class="logs-container">
+                        <div class="log-line">Waiting for logs...</div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+    <script src="/static/js/app.js?v=2"></script>
+</body>
+</html>

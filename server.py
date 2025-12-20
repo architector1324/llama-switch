@@ -15,6 +15,7 @@ from typing import Optional, List, Dict, Callable
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel
 import uvicorn
 from contextlib import asynccontextmanager
@@ -469,21 +470,34 @@ async def proxy_to_llama(request: Request):
     # Forward the request
     target_url = f"http://{state.host}:{state.current_port}{request.url.path}"
 
+    # filter headers
+    filtered_headers = {
+        k: v
+        for k, v in request.headers.items()
+        if k.lower() not in ("content-length", "host")
+    }
+
     try:
         client = httpx.AsyncClient()
+        req = client.build_request(
+            method=request.method,
+            url=target_url,
+            headers=filtered_headers,
+            json=body,
+            timeout=None,
+        )
+        r = await client.send(req, stream=True)
 
-        async def stream_generator():
-            async with client.stream(
-                method=request.method,
-                url=target_url,
-                headers=request.headers,
-                json=body,
-                timeout=None,
-            ) as response:
-                async for chunk in response.aiter_bytes():
-                    yield chunk
+        async def cleanup():
+            await r.aclose()
+            await client.aclose()
 
-        return StreamingResponse(stream_generator(), media_type="text/event-stream")
+        return StreamingResponse(
+            r.aiter_bytes(),
+            status_code=r.status_code,
+            media_type=r.headers.get("content-type"),
+            background=BackgroundTask(cleanup),
+        )
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Proxy error: {str(e)}")

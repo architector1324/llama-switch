@@ -293,6 +293,7 @@ def _start_model_server(model_key: str, ctx: Optional[int] = None) -> Dict:
                 preexec_fn=os.setsid,
                 text=True,  # Treat as text (decodes automatically)
                 bufsize=1,  # Line buffered
+                errors="replace",  # Replace invalid characters instead of crashing
             )
             state.current_model = model_key
             state.current_ctx = ctx

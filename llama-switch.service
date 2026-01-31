@@ -5,7 +5,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=%h/Projects/AI/LLama Switch
-ExecStart=/usr/bin/python3 server.py --config config.yaml --watch
+ExecStart=/usr/bin/python3 server.py --config %h/.config/llama-switch/config.yaml --watch
 Restart=on-failure
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1

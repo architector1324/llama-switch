@@ -447,7 +447,7 @@ async def proxy_to_llama(request: Request):
     if requested_model != current_model or not is_running:
         print(f"[Proxy] Auto-loading model: {requested_model}")
         try:
-            _start_model_server(requested_model)
+            _start_model_server(requested_model, state.current_ctx or state.default_ctx)
         except ValueError:
             raise HTTPException(
                 status_code=404, detail=f"Model {requested_model} not found"

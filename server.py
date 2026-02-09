@@ -405,6 +405,13 @@ def get_logs():
     return list(state.logs)
 
 
+@app.post("/api/logs/clear")
+def clear_logs():
+    with state.lock:
+        state.logs.clear()
+    return {"status": "cleared"}
+
+
 @app.post("/api/stop")
 def stop_server():
     with state.lock:

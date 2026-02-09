@@ -2,6 +2,18 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchConfig();
     startPolling();
     
+    // Setup mobile touch support for log buttons
+    const clearBtn = document.getElementById('clear-logs-btn');
+    const scrollBtn = document.getElementById('scroll-logs-btn');
+    if (clearBtn) {
+        clearBtn.addEventListener('click', clearLogs);
+        setupMobileButton(clearBtn, clearLogs);
+    }
+    if (scrollBtn) {
+        scrollBtn.addEventListener('click', scrollToBottom);
+        setupMobileButton(scrollBtn, scrollToBottom);
+    }
+    
     // Context Enter Listener
     const ctxInput = document.getElementById('ctx-input');
     ctxInput.addEventListener('keypress', function (e) {
@@ -309,4 +321,33 @@ function escapeHtml(text) {
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&#039;");
+}
+
+function clearLogs() {
+    fetch('/api/logs/clear', { method: 'POST' })
+        .then(() => {
+            const container = document.getElementById('logs-container');
+            container.innerHTML = '<div class="log-line">Waiting for logs...</div>';
+        })
+        .catch(e => console.error('Failed to clear logs:', e));
+}
+
+// Add touch event support for mobile
+function setupMobileButton(button, handler) {
+    // Handle both touch and mouse events
+    button.addEventListener('touchend', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        handler();
+    }, { passive: false });
+    
+    // Prevent ghost clicks
+    button.addEventListener('touchstart', function(e) {
+        e.stopPropagation();
+    }, { passive: true });
+}
+
+function scrollToBottom() {
+    const container = document.getElementById('logs-container');
+    container.scrollTop = container.scrollHeight;
 }

@@ -432,6 +432,7 @@ def start_server(req: StartRequest):
 
 @app.post("/v1/chat/completions")
 @app.post("/v1/completions")
+@app.post("/v1/responses")
 async def proxy_to_llama(request: Request):
     """
     Transparent proxy that auto-loads the requested model.

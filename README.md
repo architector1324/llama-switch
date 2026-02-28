@@ -42,19 +42,20 @@ Llama Switch provides a clean dashboard to list your local LLM models, start/sto
 
 Create a `config.yaml` file in the root directory. You can define as many models as you like.
 
-Use `${PORT}` and `${CTX}` placeholders in your command string; the server will inject the values automatically (default port is `11435`, or the one assigned by the app).
+Use `${HOST}`, `${PORT}` and `${CTX}` placeholders in your command string; the server will inject the values automatically (default port is `11435`, or the one assigned by the app).
 
 **Example `config.yaml`:**
 
 ```yaml
 models:
-  # Simple Text Model
-  mistral-7b:
-    cmd: llama-server --port ${PORT} --model /path/to/models/mistral-7b-v0.3.Q4_K_M.gguf -c ${CTX} -ngl 99
+  # Model with multiple quantizations
+  qwen-3:
+    q4_k_m: llama-server --port ${PORT} --model /path/to/models/qwen3-instruct-q4_k_m.gguf -c ${CTX} -ngl 99
+    q8_0: llama-server --port ${PORT} --model /path/to/models/qwen3-instruct-q8_0.gguf -c ${CTX} -ngl 99
 
   # Vision Model (with mmproj)
-  llava-v1.6:
-    cmd: llama-server --port ${PORT} --model /path/to/models/llava-v1.6-7b.Q4_K_M.gguf --mmproj /path/to/models/mmproj-model-f16.gguf -c ${CTX} -ngl 99
+  gemma-3:
+    q4_k_m: llama-server --port ${PORT} --model /path/to/models/gemma-3-it-q4_k_m.gguf --mmproj /path/to/models/gemma-3-it-mmproj.gguf -c ${CTX} -ngl 99
 ```
 
 - `-ngl 99`: Offloads layers to GPU (adjust based on your hardware).

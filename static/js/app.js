@@ -74,12 +74,31 @@ function renderModelList(models) {
     }
 
     modelKeys.forEach(key => {
+        const modelInfo = models[key];
         const item = document.createElement('div');
         item.className = 'model-item';
         item.dataset.key = key;
         
+        let quantSelector = '';
+        if (!modelInfo.cmd) {
+            // New format: multiple quantizations
+            const quants = Object.keys(modelInfo).sort();
+            if (quants.length > 1) {
+                quantSelector = `
+                    <select class="quant-select" id="quant-select-${key}" onchange="handleQuantChange('${key}')">
+                        ${quants.map(q => `<option value="${q}" ${q === 'q4_k_m' ? 'selected' : ''}>${q}</option>`).join('')}
+                    </select>
+                `;
+            } else if (quants.length === 1) {
+                quantSelector = `<span class="quant-label">${quants[0]}</span>`;
+            }
+        }
+
         item.innerHTML = `
-            <div class="model-name">${key}</div>
+            <div class="model-info">
+                <div class="model-name">${key}</div>
+                ${quantSelector}
+            </div>
             <div class="actions">
                 <button class="btn btn-primary btn-sm model-btn" onclick="handleModelClick('${key}')">Load</button>
             </div>
@@ -92,14 +111,31 @@ function handleModelClick(key) {
     // Check state to decide action
     // We allow unload only if we are fully ready. If starting, maybe allow stop too?
     // Let's stick to "Unload" button availability.
+    
+    const quantSelect = document.getElementById(`quant-select-${key}`);
+    const quantization = quantSelect ? quantSelect.value : null;
+
     if (lastStatus && lastStatus.running && lastStatus.model === key && lastStatus.ready) {
-        unloadModel(); 
-    } else {
-        loadModel(key);
+        // If same model AND same quantization (if applicable), then unload
+        if (!quantization || lastStatus.quantization === quantization) {
+            unloadModel();
+            return;
+        }
+    }
+    
+    loadModel(key, quantization);
+}
+
+function handleQuantChange(key) {
+    // If this model is currently running, reload it with the new quantization
+    if (lastStatus && lastStatus.running && lastStatus.model === key) {
+        const quantSelect = document.getElementById(`quant-select-${key}`);
+        const quantization = quantSelect ? quantSelect.value : null;
+        loadModel(key, quantization);
     }
 }
 
-async function loadModel(key) {
+async function loadModel(key, quantization = null) {
     const ctxInput = document.getElementById('ctx-input');
     const ctx = parseInt(ctxInput.value) || 4096;
     
@@ -110,7 +146,7 @@ async function loadModel(key) {
         const res = await fetch('/api/start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model_key: key, ctx: ctx })
+            body: JSON.stringify({ model_key: key, quantization: quantization, ctx: ctx })
         });
         
         if (!res.ok) {
@@ -138,7 +174,8 @@ async function applyContextChange() {
     
     // Silent Reload current model with new context
     const currentModel = lastStatus.model;
-    loadModel(currentModel);
+    const currentQuant = lastStatus.quantization;
+    loadModel(currentModel, currentQuant);
 }
 
 async function stopServer() {
@@ -267,6 +304,12 @@ function updateActiveModel(status) {
         el.classList.remove('active');
         if (status.running && status.model === el.dataset.key) {
             el.classList.add('active');
+            
+            // Also update the select to match current quantization if it's not already
+            const quantSelect = el.querySelector('.quant-select');
+            if (quantSelect && status.quantization && quantSelect.value !== status.quantization) {
+                quantSelect.value = status.quantization;
+            }
         }
     });
 }
@@ -287,8 +330,17 @@ function updateButtonsState(status) {
 
         // If backend says it's running and ready, show Unload (Source of Truth)
         if (isRunning && key === runningModel && isReady) {
-            btn.innerText = "Unload"; 
-            btn.classList.add('btn-danger');
+            // Check if quantization matches
+            const quantSelect = el.querySelector('.quant-select');
+            const selectedQuant = quantSelect ? quantSelect.value : null;
+            
+            if (!selectedQuant || selectedQuant === status.quantization) {
+                btn.innerText = "Unload";
+                btn.classList.add('btn-danger');
+            } else {
+                btn.innerText = "Switch";
+                btn.classList.add('btn-primary');
+            }
             
             // Safety: Clear loading tracker if it was stuck
             if (key === currentLoadingModel) {

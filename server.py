@@ -118,6 +118,7 @@ class ServiceState:
     def __init__(self):
         self.process: Optional[subprocess.Popen] = None
         self.current_model: Optional[str] = None
+        self.current_quant: Optional[str] = None
         self.current_ctx: int = 0
         self.current_port: int = 0
         self.default_ctx: int = 4096
@@ -153,6 +154,7 @@ def _stop_process_unsafe():
                 pass
         state.process = None
         state.current_model = None
+        state.current_quant = None
         state.current_port = 0
         state.ready = False
         # Reset stats
@@ -250,11 +252,14 @@ def log_reader(proc, log_queue):
 # --- API Models ---
 class StartRequest(BaseModel):
     model_key: str
+    quantization: Optional[str] = None
     ctx: Optional[int] = None
 
 
 # --- Internal Start Logic ---
-def _start_model_server(model_key: str, ctx: Optional[int] = None) -> Dict:
+def _start_model_server(
+    model_key: str, quantization: Optional[str] = None, ctx: Optional[int] = None
+) -> Dict:
     if not state.config_mgr:
         raise RuntimeError("Config not initialized")
 
@@ -263,7 +268,26 @@ def _start_model_server(model_key: str, ctx: Optional[int] = None) -> Dict:
         raise ValueError("Model not found in config")
 
     model_conf = models[model_key]
-    cmd_template = model_conf.get("cmd", "")
+
+    # Handle new config format (multiple quantizations)
+    if "cmd" in model_conf:
+        # Old format
+        cmd_template = model_conf.get("cmd", "")
+        actual_quant = None
+    else:
+        # New format
+        if not quantization:
+            # Default to q4_k_m if available, otherwise first one
+            if "q4_k_m" in model_conf:
+                quantization = "q4_k_m"
+            else:
+                quantization = list(model_conf.keys())[0]
+
+        if quantization not in model_conf:
+            raise ValueError(f"Quantization {quantization} not found for model {model_key}")
+
+        cmd_template = model_conf[quantization]
+        actual_quant = quantization
 
     # Determined context
     ctx = ctx if ctx is not None else state.default_ctx
@@ -296,6 +320,7 @@ def _start_model_server(model_key: str, ctx: Optional[int] = None) -> Dict:
                 errors="replace",  # Replace invalid characters instead of crashing
             )
             state.current_model = model_key
+            state.current_quant = actual_quant
             state.current_ctx = ctx
             state.current_port = port
 
@@ -334,52 +359,66 @@ def get_v1_models():
     model_list_openai = []
     model_list_custom = []
 
-    for key, model_info in models_data.items():
-        # Check capabilities
-        cmd_str = model_info.get("cmd", "")
-        capabilities = ["completion", "chat"]
-        if "mmproj" in cmd_str:
-            capabilities.append("multimodal")
+    for model_key, model_info in models_data.items():
+        # Determine available quantizations
+        if "cmd" in model_info:
+            # Old format
+            quants = {None: model_info["cmd"]}
+        else:
+            # New format
+            quants = model_info
 
-        # OpenAI Data Format
-        model_list_openai.append(
-            {
-                "id": key,
-                "object": "model",
-                "created": 1677619200,
-                "owned_by": "llamacpp",
-                "meta": {
-                    "vocab_type": 1,
-                    "n_vocab": 32000,  # Dummy
-                    "n_ctx_train": 4096,  # Dummy
-                    "n_embd": 4096,  # Dummy
-                    "n_params": 7000000000,  # Dummy
-                    "size": 4000000000,  # Dummy
-                },
-            }
-        )
+        for quant_key, cmd_str in quants.items():
+            # Determine OpenAI ID
+            if quant_key is None or quant_key == "q4_k_m":
+                openai_id = model_key
+            else:
+                openai_id = f"{model_key}-{quant_key}"
 
-        # Custom "models" Format
-        model_list_custom.append(
-            {
-                "name": key,
-                "model": key,
-                "type": "model",
-                "modified_at": "",
-                "size": "",
-                "digest": "",
-                "tags": [],
-                "capabilities": capabilities,
-                "details": {
-                    "parent_model": "",
-                    "format": "gguf",
-                    "family": "",
-                    "families": [],
-                    "parameter_size": "",
-                    "quantization_level": "",
-                },
-            }
-        )
+            # Check capabilities
+            capabilities = ["completion", "chat"]
+            if "mmproj" in cmd_str:
+                capabilities.append("multimodal")
+
+            # OpenAI Data Format
+            model_list_openai.append(
+                {
+                    "id": openai_id,
+                    "object": "model",
+                    "created": 1677619200,
+                    "owned_by": "llamacpp",
+                    "meta": {
+                        "vocab_type": 1,
+                        "n_vocab": 32000,  # Dummy
+                        "n_ctx_train": 4096,  # Dummy
+                        "n_embd": 4096,  # Dummy
+                        "n_params": 7000000000,  # Dummy
+                        "size": 4000000000,  # Dummy
+                    },
+                }
+            )
+
+            # Custom "models" Format
+            model_list_custom.append(
+                {
+                    "name": openai_id,
+                    "model": openai_id,
+                    "type": "model",
+                    "modified_at": "",
+                    "size": "",
+                    "digest": "",
+                    "tags": [],
+                    "capabilities": capabilities,
+                    "details": {
+                        "parent_model": model_key,
+                        "format": "gguf",
+                        "family": "",
+                        "families": [],
+                        "parameter_size": "",
+                        "quantization_level": quant_key or "",
+                    },
+                }
+            )
 
     return {"object": "list", "data": model_list_openai, "models": model_list_custom}
 
@@ -392,6 +431,7 @@ def get_status():
             "running": is_running,
             "ready": state.ready,
             "model": state.current_model,
+            "quantization": state.current_quant,
             "ctx": state.current_ctx,
             "port": state.current_port if is_running else None,
             "host": state.host,
@@ -422,7 +462,7 @@ def stop_server():
 @app.post("/api/start")
 def start_server(req: StartRequest):
     try:
-        updated_data = _start_model_server(req.model_key, req.ctx)
+        updated_data = _start_model_server(req.model_key, req.quantization, req.ctx)
         return {"status": "started", **updated_data}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -451,15 +491,53 @@ async def proxy_to_llama(request: Request):
         current_model = state.current_model
         is_running = state.process is not None and state.process.poll() is None
 
-    # Reload/Load if model different or not running
-    if requested_model != current_model or not is_running:
-        print(f"[Proxy] Auto-loading model: {requested_model}")
+    # Resolve model and quantization from requested_model ID
+    resolved_model = None
+    resolved_quant = None
+
+    if not state.config_mgr:
+        raise HTTPException(status_code=500, detail="Config not initialized")
+
+    models_data = state.config_mgr.get_models()
+
+    # 1. Try exact match (base model or q4_k_m)
+    if requested_model in models_data:
+        resolved_model = requested_model
+        resolved_quant = "q4_k_m" if "q4_k_m" in models_data[requested_model] else None
+    else:
+        # 2. Try to find model-quant pattern
+        for model_key, model_info in models_data.items():
+            if "cmd" in model_info:
+                continue  # Old format doesn't support suffixes
+
+            for quant_key in model_info.keys():
+                if quant_key == "q4_k_m":
+                    continue  # Already checked in step 1
+                if requested_model == f"{model_key}-{quant_key}":
+                    resolved_model = model_key
+                    resolved_quant = quant_key
+                    break
+            if resolved_model:
+                break
+
+    if not resolved_model:
+        raise HTTPException(status_code=404, detail=f"Model {requested_model} not found")
+
+    # Check if we need to load the model
+    with state.lock:
+        current_model = state.current_model
+        current_quant = state.current_quant
+        is_running = state.process is not None and state.process.poll() is None
+
+    # Reload/Load if model/quant different or not running
+    if resolved_model != current_model or resolved_quant != current_quant or not is_running:
+        print(f"[Proxy] Auto-loading model: {resolved_model} (quant: {resolved_quant})")
         try:
-            _start_model_server(requested_model, state.current_ctx or state.default_ctx)
-        except ValueError:
-            raise HTTPException(
-                status_code=404, detail=f"Model {requested_model} not found"
+            _start_model_server(
+                resolved_model, resolved_quant, state.current_ctx or state.default_ctx
             )
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
         except RuntimeError as e:
             raise HTTPException(status_code=500, detail=str(e))
 

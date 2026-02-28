@@ -263,6 +263,13 @@ body {
     border-color: rgba(16, 185, 129, 0.2);
 }
 
+.model-info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    overflow: hidden;
+}
+
 .model-name {
     font-weight: 500;
     font-size: 14px;
@@ -271,6 +278,31 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
     padding-right: 12px;
+}
+
+.quant-select {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    font-size: 11px;
+    padding: 2px 6px;
+    width: fit-content;
+    outline: none;
+    cursor: pointer;
+}
+
+.quant-select:focus {
+    border-color: var(--primary);
+}
+
+.quant-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--bg-hover);
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    width: fit-content;
 }
 
 .model-item.active .model-name {

@@ -1,24 +1,25 @@
-import os
-import sys
-import yaml
-import json
-import time
-import asyncio
-import socket
-import signal
-import subprocess
-import threading
 import argparse
-import httpx
+import asyncio
+import json
+import os
+import signal
+import socket
+import subprocess
+import sys
+import threading
+import time
 from collections import deque
-from typing import Optional, List, Dict, Callable
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, StreamingResponse
-from starlette.background import BackgroundTask
-from pydantic import BaseModel
-import uvicorn
 from contextlib import asynccontextmanager
+from typing import Callable, Dict, List, Optional
+
+import httpx
+import uvicorn
+import yaml
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+from starlette.background import BackgroundTask
 
 
 # --- Lifespan ---
@@ -257,6 +258,15 @@ class StartRequest(BaseModel):
 
 
 # --- Internal Start Logic ---
+def _default_quant(model_conf: Dict) -> Optional[str]:
+    """Default quantization for a model: None for the old (single-cmd) format,
+    otherwise the first quant listed in the config (insertion order is preserved
+    by yaml.safe_load on Python 3.7+)."""
+    if "cmd" in model_conf:
+        return None
+    return next(iter(model_conf), None)
+
+
 def _start_model_server(
     model_key: str, quantization: Optional[str] = None, ctx: Optional[int] = None
 ) -> Dict:
@@ -277,14 +287,13 @@ def _start_model_server(
     else:
         # New format
         if not quantization:
-            # Default to q4_k_m if available, otherwise first one
-            if "q4_k_m" in model_conf:
-                quantization = "q4_k_m"
-            else:
-                quantization = list(model_conf.keys())[0]
+            # Default to the first quantization listed in the config
+            quantization = _default_quant(model_conf)
 
         if quantization not in model_conf:
-            raise ValueError(f"Quantization {quantization} not found for model {model_key}")
+            raise ValueError(
+                f"Quantization {quantization} not found for model {model_key}"
+            )
 
         cmd_template = model_conf[quantization]
         actual_quant = quantization
@@ -368,9 +377,12 @@ def get_v1_models():
             # New format
             quants = model_info
 
+        # The default (first-listed) quant is exposed under the bare model id
+        default_quant = next(iter(quants), None)
+
         for quant_key, cmd_str in quants.items():
             # Determine OpenAI ID
-            if quant_key is None or quant_key == "q4_k_m":
+            if quant_key == default_quant:
                 openai_id = model_key
             else:
                 openai_id = f"{model_key}-{quant_key}"
@@ -500,19 +512,20 @@ async def proxy_to_llama(request: Request):
 
     models_data = state.config_mgr.get_models()
 
-    # 1. Try exact match (base model or q4_k_m)
+    # 1. Try exact match (bare model id -> first/default quant)
     if requested_model in models_data:
         resolved_model = requested_model
-        resolved_quant = "q4_k_m" if "q4_k_m" in models_data[requested_model] else None
+        resolved_quant = _default_quant(models_data[requested_model])
     else:
         # 2. Try to find model-quant pattern
         for model_key, model_info in models_data.items():
             if "cmd" in model_info:
                 continue  # Old format doesn't support suffixes
 
+            default_quant = _default_quant(model_info)
             for quant_key in model_info.keys():
-                if quant_key == "q4_k_m":
-                    continue  # Already checked in step 1
+                if quant_key == default_quant:
+                    continue  # Already covered by the bare model id in step 1
                 if requested_model == f"{model_key}-{quant_key}":
                     resolved_model = model_key
                     resolved_quant = quant_key
@@ -521,7 +534,9 @@ async def proxy_to_llama(request: Request):
                 break
 
     if not resolved_model:
-        raise HTTPException(status_code=404, detail=f"Model {requested_model} not found")
+        raise HTTPException(
+            status_code=404, detail=f"Model {requested_model} not found"
+        )
 
     # Check if we need to load the model
     with state.lock:
@@ -530,7 +545,11 @@ async def proxy_to_llama(request: Request):
         is_running = state.process is not None and state.process.poll() is None
 
     # Reload/Load if model/quant different or not running
-    if resolved_model != current_model or resolved_quant != current_quant or not is_running:
+    if (
+        resolved_model != current_model
+        or resolved_quant != current_quant
+        or not is_running
+    ):
         print(f"[Proxy] Auto-loading model: {resolved_model} (quant: {resolved_quant})")
         try:
             _start_model_server(

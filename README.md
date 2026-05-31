@@ -51,7 +51,7 @@ models:
   # Model with multiple quantizations
   qwen-3:
     q4_k_m: llama-server --port ${PORT} --model /path/to/models/qwen3-instruct-q4_k_m.gguf -c ${CTX} -ngl 99
-    q8_0: llama-server --port ${PORT} --model /path/to/models/qwen3-instruct-q8_0.gguf -c ${CTX} -ngl 99
+    q8_k_xl: llama-server --port ${PORT} --model /path/to/models/qwen3-instruct-UD-Q8_K_XL.gguf -c ${CTX} -ngl 99
 
   # Vision Model (with mmproj)
   gemma-3:
@@ -60,6 +60,8 @@ models:
 
 - `-ngl 99`: Offloads layers to GPU (adjust based on your hardware).
 - `-c ${CTX}`: Sets the context window (controllable via UI).
+
+**Default quantization:** The **first** quant listed for a model is its default. Through the OpenAI-compatible API (`/v1/models`, `/v1/chat/completions`, …) that default is exposed under the bare model id (e.g. `qwen-3`), while the rest get a `-<quant>` suffix (e.g. `qwen-3-q8_k_xl`). Requesting the bare id loads the first-listed quant — so order each model's variants with the preferred one first.
 
 ## Usage
 

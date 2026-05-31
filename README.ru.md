@@ -51,7 +51,7 @@ models:
   # Модель с несколькими вариантами квантования
   qwen-3:
     q4_k_m: llama-server --port ${PORT} --model /path/to/models/qwen3-instruct-q4_k_m.gguf -c ${CTX} -ngl 99
-    q8_0: llama-server --port ${PORT} --model /path/to/models/qwen3-instruct-q8_0.gguf -c ${CTX} -ngl 99
+    q8_k_xl: llama-server --port ${PORT} --model /path/to/models/qwen3-instruct-UD-Q8_K_XL.gguf -c ${CTX} -ngl 99
 
   # Мультимодальная модель (Vision/Image, с mmproj)
   gemma-3:
@@ -60,6 +60,8 @@ models:
 
 - `-ngl 99`: Выгрузка слоев на GPU (настройте в зависимости от вашего железа).
 - `-c ${CTX}`: Устанавливает размер контекстного окна (меняется через UI).
+
+**Квантование по умолчанию:** дефолтным считается **первый** вариант квантования в списке модели. Через OpenAI-совместимый API (`/v1/models`, `/v1/chat/completions`, …) он доступен под «голым» id модели (например, `qwen-3`), а остальные — с суффиксом `-<quant>` (например, `qwen-3-q8_k_xl`). Запрос «голого» id загружает первый по списку вариант — поэтому ставьте предпочтительный квант первым в группе модели.
 
 ## Использование
 

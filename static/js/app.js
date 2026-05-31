@@ -81,12 +81,13 @@ function renderModelList(models) {
         
         let quantSelector = '';
         if (!modelInfo.cmd) {
-            // New format: multiple quantizations
-            const quants = Object.keys(modelInfo).sort();
+            // New format: multiple quantizations.
+            // Keep config order; the first listed quant is the default.
+            const quants = Object.keys(modelInfo);
             if (quants.length > 1) {
                 quantSelector = `
                     <select class="quant-select" id="quant-select-${key}" onchange="handleQuantChange('${key}')">
-                        ${quants.map(q => `<option value="${q}" ${q === 'q4_k_m' ? 'selected' : ''}>${q}</option>`).join('')}
+                        ${quants.map((q, i) => `<option value="${q}" ${i === 0 ? 'selected' : ''}>${q}</option>`).join('')}
                     </select>
                 `;
             } else if (quants.length === 1) {

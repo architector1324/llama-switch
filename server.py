@@ -206,11 +206,16 @@ def log_reader(proc, log_queue):
 
                 # Check for ready state (Robust check)
 
+                # Match stable substrings that survive llama.cpp log format
+                # changes. Old format: "main: model loaded" /
+                # "main: server is listening on http://...". New format
+                # (srv llama_server): "llama_server: model loaded" /
+                # "llama_server: listening on http://...".
                 if (
-                    "main: model loaded" in decoded
+                    "model loaded" in decoded
                     or '"msg":"model loaded"' in decoded
-                    or "server is listening on" in decoded
-                    or "main: server is listening" in decoded
+                    or "listening on" in decoded
+                    or "server is listening" in decoded
                 ):
                     with state.lock:
                         if not state.ready:

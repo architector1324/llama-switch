@@ -54,6 +54,10 @@ async function fetchConfig() {
         const res = await fetch('/api/config');
         const data = await res.json();
         currentConfig = data;
+        // Use the server's default context window as the source of truth.
+        if (data.default_ctx) {
+            document.getElementById('ctx-input').value = data.default_ctx;
+        }
         renderModelList(data.models || {});
     } catch (e) {
         console.error("Failed to load config", e);

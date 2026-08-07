@@ -48,31 +48,55 @@
                     <div class="dashboard-grid">
                         <!-- Left Column: Stats -->
                         <div class="dash-column stats-column">
-                            <div class="stat-row">
-                                <div class="stat-box">
-                                    <span class="label">Gen Speed</span>
-                                    <span class="value" id="stat-gen-speed">-</span>
+                            <div id="stats-llm">
+                                <div class="stat-row">
+                                    <div class="stat-box">
+                                        <span class="label">Gen Speed</span>
+                                        <span class="value" id="stat-gen-speed">-</span>
+                                    </div>
+                                    <div class="stat-box">
+                                        <span class="label">Prompt Speed</span>
+                                        <span class="value" id="stat-prompt-speed">-</span>
+                                    </div>
                                 </div>
-                                <div class="stat-box">
-                                    <span class="label">Prompt Speed</span>
-                                    <span class="value" id="stat-prompt-speed">-</span>
+                                <div class="stat-row">
+                                    <div class="stat-box">
+                                        <span class="label">Ctx Usage</span>
+                                        <span class="value" id="stat-ctx-usage">-</span>
+                                    </div>
+                                    <div class="stat-box">
+                                        <span class="label">Total Tokens</span>
+                                        <span class="value" id="stat-total-tokens">-</span>
+                                    </div>
                                 </div>
                             </div>
-                            <div class="stat-row">
-                                <div class="stat-box">
-                                    <span class="label">Ctx Usage</span>
-                                    <span class="value" id="stat-ctx-usage">-</span>
+                            <div id="stats-sd" style="display: none;">
+                                <div class="stat-row">
+                                    <div class="stat-box">
+                                        <span class="label">Step Time</span>
+                                        <span class="value" id="stat-sd-speed">-</span>
+                                    </div>
+                                    <div class="stat-box">
+                                        <span class="label">Last Image</span>
+                                        <span class="value" id="stat-sd-last">-</span>
+                                    </div>
                                 </div>
-                                <div class="stat-box">
-                                    <span class="label">Total Tokens</span>
-                                    <span class="value" id="stat-total-tokens">-</span>
+                                <div class="stat-row">
+                                    <div class="stat-box">
+                                        <span class="label">Progress</span>
+                                        <span class="value" id="stat-sd-progress">-</span>
+                                    </div>
+                                    <div class="stat-box">
+                                        <span class="label">Images</span>
+                                        <span class="value" id="stat-sd-images">-</span>
+                                    </div>
                                 </div>
                             </div>
                         </div>
 
                         <!-- Right Column: Settings & Status -->
                         <div class="dash-column settings-column">
-                            <div class="control-group compact-group">
+                            <div class="control-group compact-group" id="ctx-control">
                                 <label for="ctx-input">Context Window</label>
                                 <div class="input-wrapper">
                                     <input type="number" id="ctx-input" value="4096" min="512" step="512">

@@ -65,16 +65,38 @@ async function fetchConfig() {
     }
 }
 
+const SECTION_LABELS = { llm: 'Language', sd: 'Image' };
+
 function renderModelList(models) {
     const list = document.getElementById('model-list');
     list.innerHTML = '';
-    
-    // Convert to array and sort
-    const modelKeys = Object.keys(models).sort();
-    
-    if (modelKeys.length === 0) {
+
+    if (Object.keys(models).length === 0) {
         list.innerHTML = '<div class="model-item">No models found in config</div>';
         return;
+    }
+
+    // Group by config section. Older servers send no "sections", so fall back
+    // to one unlabelled group holding everything.
+    const sections = currentConfig.sections;
+    if (!sections) {
+        renderModelGroup(list, models, Object.keys(models).sort(), null);
+        return;
+    }
+
+    Object.keys(sections).forEach(name => {
+        const keys = Object.keys(sections[name] || {}).sort();
+        if (keys.length === 0) return;
+        renderModelGroup(list, sections[name], keys, name);
+    });
+}
+
+function renderModelGroup(list, models, modelKeys, sectionName) {
+    if (sectionName) {
+        const header = document.createElement('div');
+        header.className = 'model-group-header';
+        header.textContent = SECTION_LABELS[sectionName] || sectionName;
+        list.appendChild(header);
     }
 
     modelKeys.forEach(key => {
@@ -247,27 +269,47 @@ function updateStatusDisplay(status) {
     // const ctxText = document.getElementById('current-ctx'); // Removed from DOM
     const webuiBtn = document.getElementById('webui-btn');
     
+    applyDashboardKind(status.kind);
+
     if (status.running) {
         indicator.classList.add('on');
         statusText.innerText = `Running (Port: ${status.port || '?'})`;
         statusText.style.color = 'var(--success)';
         modelText.innerText = status.model || 'Unknown';
         // ctxText.innerText = status.ctx || '-';
-        
+
         // Update Stats
-        if (status.stats) {
+        if (status.stats && status.kind === 'sd') {
+            const s = status.stats;
+
+            const speedEl = document.getElementById('stat-sd-speed');
+            if (speedEl) speedEl.innerText = s.sd_speed ? `${s.sd_speed.toFixed(2)} s/it` : '-';
+
+            const lastEl = document.getElementById('stat-sd-last');
+            if (lastEl) lastEl.innerText = s.sd_last_time ? `${s.sd_last_time.toFixed(2)} s` : '-';
+
+            const progEl = document.getElementById('stat-sd-progress');
+            if (progEl) {
+                progEl.innerText = s.sd_steps
+                    ? `${s.sd_step} / ${s.sd_steps}${s.sd_size ? ` · ${s.sd_size}` : ''}`
+                    : '-';
+            }
+
+            const imgEl = document.getElementById('stat-sd-images');
+            if (imgEl) imgEl.innerText = s.sd_images || 0;
+        } else if (status.stats) {
             const used = status.stats.ctx_used || 0;
             const limit = status.ctx || 0; // Use status.ctx as the limit source
-            
+
             const ctxUsageEl = document.getElementById('stat-ctx-usage');
             if (ctxUsageEl) ctxUsageEl.innerText = `${used} / ${limit}`;
-            
+
             const genSpeedEl = document.getElementById('stat-gen-speed');
             if (genSpeedEl) genSpeedEl.innerText = status.stats.gen_speed ? `${status.stats.gen_speed.toFixed(2)} t/s` : '-';
-            
+
             const promptSpeedEl = document.getElementById('stat-prompt-speed');
             if (promptSpeedEl) promptSpeedEl.innerText = status.stats.prompt_speed ? `${status.stats.prompt_speed.toFixed(2)} t/s` : '-';
-            
+
             const totalTokensEl = document.getElementById('stat-total-tokens');
             if(totalTokensEl) totalTokensEl.innerText = status.stats.total_tokens || 0;
         }
@@ -301,7 +343,25 @@ function updateStatusDisplay(status) {
         
         const totalTokensEl = document.getElementById('stat-total-tokens');
         if(totalTokensEl) totalTokensEl.innerText = '-';
+
+        ['stat-sd-speed', 'stat-sd-last', 'stat-sd-progress', 'stat-sd-images'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.innerText = '-';
+        });
     }
+}
+
+// sd-server has no context window and reports seconds per step instead of
+// tokens per second, so the two backends get different stat boxes.
+function applyDashboardKind(kind) {
+    const isSd = kind === 'sd';
+    const llmStats = document.getElementById('stats-llm');
+    const sdStats = document.getElementById('stats-sd');
+    const ctxControl = document.getElementById('ctx-control');
+
+    if (llmStats) llmStats.style.display = isSd ? 'none' : '';
+    if (sdStats) sdStats.style.display = isSd ? '' : 'none';
+    if (ctxControl) ctxControl.style.display = isSd ? 'none' : '';
 }
 
 function updateActiveModel(status) {

@@ -47,6 +47,9 @@ def find_free_port():
 
 
 # --- Config Manager ---
+SECTIONS = ("llm", "sd")
+
+
 class ConfigManager:
     def __init__(
         self,
@@ -56,7 +59,9 @@ class ConfigManager:
     ):
         self.config_file = config_file
         self.watch = watch
+        self.sections = {name: {} for name in SECTIONS}
         self.models = {}
+        self.model_kind = {}
         self.last_mtime = 0
         self.lock = threading.Lock()
         self.on_change = on_change
@@ -73,18 +78,47 @@ class ConfigManager:
         with self.lock:
             if not os.path.exists(self.config_file):
                 print(f"[Config] Error: {self.config_file} not found")
+                self.sections = {name: {} for name in SECTIONS}
                 self.models = {}
+                self.model_kind = {}
                 return
 
             try:
                 mtime = os.stat(self.config_file).st_mtime
                 with open(self.config_file, "r") as f:
-                    data = yaml.safe_load(f)
-                    self.models = data.get("models", {})
-                    self.last_mtime = mtime
-                print(
-                    f"[Config] Loaded {len(self.models)} models from {self.config_file}"
-                )
+                    data = yaml.safe_load(f) or {}
+
+                sections = {name: (data.get(name) or {}) for name in SECTIONS}
+
+                # Pre-sections configs put every model under a single "models"
+                # key. Keep reading those so an old config still works after an
+                # upgrade; an explicit "llm" section always wins.
+                legacy = data.get("models")
+                if legacy and not sections["llm"]:
+                    sections["llm"] = legacy
+                    print("[Config] legacy 'models:' section loaded as 'llm'")
+
+                models = {}
+                model_kind = {}
+                for name in SECTIONS:
+                    for key, conf in sections[name].items():
+                        if key in models:
+                            print(
+                                f"[Config] Duplicate model '{key}' in section "
+                                f"'{name}', keeping the one from "
+                                f"'{model_kind[key]}'"
+                            )
+                            continue
+                        models[key] = conf
+                        model_kind[key] = name
+
+                self.sections = sections
+                self.models = models
+                self.model_kind = model_kind
+                self.last_mtime = mtime
+
+                counts = ", ".join(f"{n}: {len(sections[n])}" for n in SECTIONS)
+                print(f"[Config] Loaded {len(models)} models ({counts}) from {self.config_file}")
             except Exception as e:
                 print(f"[Config] Failed to load config: {e}")
 
@@ -104,9 +138,17 @@ class ConfigManager:
             except Exception as e:
                 print(f"[Config] Watch error: {e}")
 
-    def get_models(self):
+    def get_models(self, kind: Optional[str] = None):
+        """All models merged across sections, or just one section's models."""
         with self.lock:
-            return self.models
+            if kind is None:
+                return self.models
+            return self.sections.get(kind, {})
+
+    def get_kind(self, model_key: str) -> Optional[str]:
+        """Which section a model came from: "llm", "sd", or None if unknown."""
+        with self.lock:
+            return self.model_kind.get(model_key)
 
 
 import re
@@ -122,6 +164,7 @@ class ServiceState:
         self.current_quant: Optional[str] = None
         self.current_ctx: int = 0
         self.current_port: int = 0
+        self.current_kind: Optional[str] = None
         self.default_ctx: int = 4096
         self.host: str = "0.0.0.0"
         self.ready: bool = False
@@ -134,6 +177,14 @@ class ServiceState:
             "total_tokens": 0,  # Accumulated generation
             "prompt_speed": 0.0,
             "gen_speed": 0.0,
+            # sd-server: step/steps drive the bar, sd_speed is always seconds
+            # per step regardless of which unit sd.cpp chose to print.
+            "sd_step": 0,
+            "sd_steps": 0,
+            "sd_speed": 0.0,
+            "sd_last_time": 0.0,
+            "sd_images": 0,
+            "sd_size": "",
         }
 
 
@@ -157,6 +208,7 @@ def _stop_process_unsafe():
         state.current_model = None
         state.current_quant = None
         state.current_port = 0
+        state.current_kind = None
         state.ready = False
         # Reset stats
         state.stats = {
@@ -165,6 +217,14 @@ def _stop_process_unsafe():
             "total_tokens": 0,
             "prompt_speed": 0.0,
             "gen_speed": 0.0,
+            # sd-server: step/steps drive the bar, sd_speed is always seconds
+            # per step regardless of which unit sd.cpp chose to print.
+            "sd_step": 0,
+            "sd_steps": 0,
+            "sd_speed": 0.0,
+            "sd_last_time": 0.0,
+            "sd_images": 0,
+            "sd_size": "",
         }
         print("[Service] Process stopped.")
 
@@ -177,6 +237,34 @@ def on_config_change():
 
 
 # --- Log Reader ---
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _iter_output_chunks(proc):
+    """Yield output split on CR as well as LF.
+
+    llama-server ends every line with LF, but sd-server redraws its sampling
+    progress in place with CR and no LF until the final step. readline() would
+    therefore hold the whole run back and deliver it as one blob at the end,
+    so the dashboard would never see progress while it is happening.
+    """
+    buf = ""
+    while True:
+        chunk = proc.stdout.read(1)
+        if not chunk:
+            if proc.poll() is not None:
+                break
+            continue
+        if chunk in ("\r", "\n"):
+            if buf:
+                yield _ANSI_RE.sub("", buf).rstrip()
+                buf = ""
+            continue
+        buf += chunk
+    if buf:
+        yield _ANSI_RE.sub("", buf).rstrip()
+
+
 def log_reader(proc, log_queue):
     # Regex patterns
     # prompt eval time =       4.67 ms /    11 tokens (    0.42 ms per token,  2355.46 tokens per second)
@@ -195,16 +283,18 @@ def log_reader(proc, log_queue):
     # slot      release: id  3 | task 10 | stop processing: n_tokens = 73, truncated = 0
     re_release = re.compile(r"stop processing: n_tokens = (\d+)")
 
-    try:
-        while True:
-            line = proc.stdout.readline()
-            if not line and proc.poll() is not None:
-                # Process ended
-                break
+    # sd-server sampling progress: "|====>     | 3/8 - 6.59s/it" (or "12.30it/s")
+    re_sd_step = re.compile(r"\|\s*(\d+)/(\d+)\s*-\s*([\d\.]+)(s/it|it/s)")
 
-            if line:
-                # line is already string due to text=True
-                decoded = line.rstrip()
+    # [INFO ] stable-diffusion.cpp:5675 - sampling completed, taking 23.84s
+    re_sd_done = re.compile(r"sampling completed, taking\s*([\d\.]+)s")
+
+    # [INFO ] stable-diffusion.cpp:5592 - generate_image 1024x1024
+    re_sd_size = re.compile(r"generate_image\s+(\d+)x(\d+)")
+
+    try:
+        for decoded in _iter_output_chunks(proc):
+            if decoded:
                 log_queue.append(decoded)
 
                 # Check for ready state (Robust check)
@@ -251,6 +341,37 @@ def log_reader(proc, log_queue):
                             state.stats["ctx_used"] = used
                             if state.current_ctx > 0:
                                 state.stats["ctx_limit"] = state.current_ctx
+
+                    # --- sd-server ---
+
+                    sm = re_sd_step.search(decoded)
+                    if sm:
+                        step, steps = int(sm.group(1)), int(sm.group(2))
+                        value, unit = float(sm.group(3)), sm.group(4)
+                        # sd.cpp flips the unit below 1s per step; normalise to
+                        # s/it so the dashboard never has to switch labels.
+                        sec_per_step = value if unit == "s/it" else (
+                            1.0 / value if value > 0 else 0.0
+                        )
+                        with state.lock:
+                            state.stats["sd_step"] = step
+                            state.stats["sd_steps"] = steps
+                            state.stats["sd_speed"] = round(sec_per_step, 2)
+
+                    dm = re_sd_done.search(decoded)
+                    if dm:
+                        with state.lock:
+                            state.stats["sd_last_time"] = float(dm.group(1))
+                            state.stats["sd_images"] += 1
+                            # Park the bar at 100% instead of the last partial step.
+                            if state.stats["sd_steps"]:
+                                state.stats["sd_step"] = state.stats["sd_steps"]
+
+                    zm = re_sd_size.search(decoded)
+                    if zm:
+                        with state.lock:
+                            state.stats["sd_size"] = f"{zm.group(1)}x{zm.group(2)}"
+                            state.stats["sd_step"] = 0
                 except Exception as e:
                     print(f"[Service] Log parsing error: {e}")
 
@@ -286,6 +407,7 @@ def _start_model_server(
         raise ValueError("Model not found in config")
 
     model_conf = models[model_key]
+    kind = state.config_mgr.get_kind(model_key) or "llm"
 
     # Handle new config format (multiple quantizations)
     if "cmd" in model_conf:
@@ -338,8 +460,11 @@ def _start_model_server(
             )
             state.current_model = model_key
             state.current_quant = actual_quant
-            state.current_ctx = ctx
+            # sd-server has no context window; reporting one would drive the
+            # context gauge in the UI off a number that means nothing there.
+            state.current_ctx = ctx if kind == "llm" else 0
             state.current_port = port
+            state.current_kind = kind
 
             t = threading.Thread(
                 target=log_reader, args=(state.process, state.logs), daemon=True
@@ -359,11 +484,23 @@ def _start_model_server(
 @app.get("/api/config")
 def get_config():
     if not state.config_mgr:
-        models = {}
-    else:
-        models = state.config_mgr.get_models()
+        return {
+            "models": {},
+            "sections": {name: {} for name in SECTIONS},
+            "kinds": {},
+            "default_ctx": state.default_ctx,
+        }
 
-    return {"models": models, "default_ctx": state.default_ctx}
+    models = state.config_mgr.get_models()
+    return {
+        # Flat map kept for older clients; "sections" is the grouped view.
+        "models": models,
+        "sections": {
+            name: state.config_mgr.get_models(name) for name in SECTIONS
+        },
+        "kinds": {key: state.config_mgr.get_kind(key) for key in models},
+        "default_ctx": state.default_ctx,
+    }
 
 
 @app.get("/v1/models")
@@ -372,7 +509,9 @@ def get_v1_models():
     if not state.config_mgr:
         return {"object": "list", "data": [], "models": []}
 
-    models_data = state.config_mgr.get_models()
+    # Only text models: /v1/models feeds chat clients, and listing image
+    # backends there makes them offer sd-server as a chat model.
+    models_data = state.config_mgr.get_models("llm")
     model_list_openai = []
     model_list_custom = []
 
@@ -452,6 +591,7 @@ def get_status():
             "ready": state.ready,
             "model": state.current_model,
             "quantization": state.current_quant,
+            "kind": state.current_kind,
             "ctx": state.current_ctx,
             "port": state.current_port if is_running else None,
             "host": state.host,
@@ -518,7 +658,8 @@ async def proxy_to_llama(request: Request):
     if not state.config_mgr:
         raise HTTPException(status_code=500, detail="Config not initialized")
 
-    models_data = state.config_mgr.get_models()
+    # Text endpoints resolve against text models only, matching /v1/models.
+    models_data = state.config_mgr.get_models("llm")
 
     # 1. Try exact match (bare model id -> first/default quant)
     if requested_model in models_data:
@@ -615,6 +756,88 @@ async def proxy_to_llama(request: Request):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Proxy error: {str(e)}")
+
+
+# --- Image proxy ---
+# sd-server speaks three dialects at once, so forward all of them verbatim:
+#   /v1/images/*   OpenAI
+#   /sdapi/v1/*    AUTOMATIC1111 (what open-webui talks by default)
+#   /sdcpp/v1/*    native, also what sd-server's own WebUI uses
+# Unlike the text proxy there is no model name in these payloads, so the
+# caller picks the model beforehand (UI, /api/start) and this only forwards.
+IMAGE_PREFIXES = ("/v1/images/", "/sdapi/v1/", "/sdcpp/v1/")
+
+
+async def _proxy_to_current(request: Request, path: str):
+    with state.lock:
+        is_running = state.process is not None and state.process.poll() is None
+        kind = state.current_kind
+        port = state.current_port
+
+    if not is_running:
+        raise HTTPException(status_code=503, detail="No model is running")
+    if kind != "sd":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Current model is '{kind}', load an sd model first",
+        )
+
+    retries = 0
+    while retries < 60 and not state.ready:
+        await asyncio.sleep(1)
+        retries += 1
+    if not state.ready:
+        raise HTTPException(status_code=504, detail="Model failed to load in time")
+
+    target_url = f"http://{state.host}:{port}/{path}"
+    if request.url.query:
+        target_url += f"?{request.url.query}"
+
+    filtered_headers = {
+        k: v
+        for k, v in request.headers.items()
+        if k.lower() not in ("content-length", "host")
+    }
+    raw_body = await request.body()
+
+    try:
+        client = httpx.AsyncClient()
+        req = client.build_request(
+            method=request.method,
+            url=target_url,
+            headers=filtered_headers,
+            content=raw_body or None,
+            timeout=None,
+        )
+        r = await client.send(req, stream=True)
+
+        async def cleanup():
+            await r.aclose()
+            await client.aclose()
+
+        return StreamingResponse(
+            r.aiter_bytes(),
+            status_code=r.status_code,
+            media_type=r.headers.get("content-type"),
+            background=BackgroundTask(cleanup),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Proxy error: {str(e)}")
+
+
+@app.api_route("/v1/images/{path:path}", methods=["GET", "POST"])
+async def proxy_openai_images(request: Request, path: str):
+    return await _proxy_to_current(request, f"v1/images/{path}")
+
+
+@app.api_route("/sdapi/v1/{path:path}", methods=["GET", "POST"])
+async def proxy_sdapi(request: Request, path: str):
+    return await _proxy_to_current(request, f"sdapi/v1/{path}")
+
+
+@app.api_route("/sdcpp/v1/{path:path}", methods=["GET", "POST"])
+async def proxy_sdcpp(request: Request, path: str):
+    return await _proxy_to_current(request, f"sdcpp/v1/{path}")
 
 
 # --- Static files ---

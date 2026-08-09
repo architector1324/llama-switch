@@ -273,11 +273,11 @@ def log_reader(proc, log_queue):
     )
 
     # eval time =     492.12 ms /     9 tokens (   54.68 ms per token,    18.29 tokens per second)
-    # Anchored to line start: a leading \s+ also matches inside
-    # "prompt eval time" (there is a space before "eval"), which made
-    # gen_speed and total_tokens pick up the prompt figures.
+    # The lookbehind is what separates this from "prompt eval time"; anchoring
+    # to line start does not work, the line carries a
+    # "<ts> I slot print_timing: id 0 | task 0 |" prefix.
     re_eval = re.compile(
-        r"^\s*eval time\s*=\s*[\d\.]+\s*ms\s*/\s*(\d+)\s*tokens\s*\(\s*[\d\.]+\s*ms per token,\s*([\d\.]+)\s*tokens per second\)"
+        r"(?<!prompt )eval time\s*=\s*[\d\.]+\s*ms\s*/\s*(\d+)\s*tokens\s*\(\s*[\d\.]+\s*ms per token,\s*([\d\.]+)\s*tokens per second\)"
     )
 
     # slot      release: id  3 | task 10 | stop processing: n_tokens = 73, truncated = 0

@@ -10,7 +10,7 @@ import threading
 import time
 from collections import deque
 from contextlib import asynccontextmanager
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 import httpx
 import uvicorn
@@ -396,6 +396,52 @@ def _default_quant(model_conf: Dict) -> Optional[str]:
     return next(iter(model_conf), None)
 
 
+def _resolve_model(requested_model: str, kind: str) -> Tuple[str, Optional[str]]:
+    """Resolve an OpenAI-style model id to (model_key, quantization) within one kind.
+
+    A bare id selects the model's default quant; a `<model>-<quant>` suffix selects
+    an explicit one, mirroring how the ids are published in /v1/models."""
+    if not state.config_mgr:
+        raise HTTPException(status_code=500, detail="Config not initialized")
+
+    models_data = state.config_mgr.get_models(kind)
+
+    if requested_model in models_data:
+        return requested_model, _default_quant(models_data[requested_model])
+
+    for model_key, model_info in models_data.items():
+        if "cmd" in model_info:
+            continue  # Old format doesn't support suffixes
+
+        default_quant = _default_quant(model_info)
+        for quant_key in model_info.keys():
+            if quant_key == default_quant:
+                continue  # Already covered by the bare model id above
+            if requested_model == f"{model_key}-{quant_key}":
+                return model_key, quant_key
+
+    raise HTTPException(status_code=404, detail=f"Model {requested_model} not found")
+
+
+def _autoload_model(model_key: str, quant: Optional[str]) -> None:
+    """Load the model unless it is already the running one."""
+    with state.lock:
+        current_model = state.current_model
+        current_quant = state.current_quant
+        is_running = state.process is not None and state.process.poll() is None
+
+    if model_key == current_model and quant == current_quant and is_running:
+        return
+
+    print(f"[Proxy] Auto-loading model: {model_key} (quant: {quant})")
+    try:
+        _start_model_server(model_key, quant, state.current_ctx or state.default_ctx)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 def _start_model_server(
     model_key: str, quantization: Optional[str] = None, ctx: Optional[int] = None
 ) -> Dict:
@@ -646,68 +692,8 @@ async def proxy_to_llama(request: Request):
     if not requested_model:
         raise HTTPException(status_code=400, detail="Model field required")
 
-    # Check if we need to load the model
-    with state.lock:
-        current_model = state.current_model
-        is_running = state.process is not None and state.process.poll() is None
-
-    # Resolve model and quantization from requested_model ID
-    resolved_model = None
-    resolved_quant = None
-
-    if not state.config_mgr:
-        raise HTTPException(status_code=500, detail="Config not initialized")
-
     # Text endpoints resolve against text models only, matching /v1/models.
-    models_data = state.config_mgr.get_models("llm")
-
-    # 1. Try exact match (bare model id -> first/default quant)
-    if requested_model in models_data:
-        resolved_model = requested_model
-        resolved_quant = _default_quant(models_data[requested_model])
-    else:
-        # 2. Try to find model-quant pattern
-        for model_key, model_info in models_data.items():
-            if "cmd" in model_info:
-                continue  # Old format doesn't support suffixes
-
-            default_quant = _default_quant(model_info)
-            for quant_key in model_info.keys():
-                if quant_key == default_quant:
-                    continue  # Already covered by the bare model id in step 1
-                if requested_model == f"{model_key}-{quant_key}":
-                    resolved_model = model_key
-                    resolved_quant = quant_key
-                    break
-            if resolved_model:
-                break
-
-    if not resolved_model:
-        raise HTTPException(
-            status_code=404, detail=f"Model {requested_model} not found"
-        )
-
-    # Check if we need to load the model
-    with state.lock:
-        current_model = state.current_model
-        current_quant = state.current_quant
-        is_running = state.process is not None and state.process.poll() is None
-
-    # Reload/Load if model/quant different or not running
-    if (
-        resolved_model != current_model
-        or resolved_quant != current_quant
-        or not is_running
-    ):
-        print(f"[Proxy] Auto-loading model: {resolved_model} (quant: {resolved_quant})")
-        try:
-            _start_model_server(
-                resolved_model, resolved_quant, state.current_ctx or state.default_ctx
-            )
-        except ValueError as e:
-            raise HTTPException(status_code=404, detail=str(e))
-        except RuntimeError as e:
-            raise HTTPException(status_code=500, detail=str(e))
+    _autoload_model(*_resolve_model(requested_model, "llm"))
 
     # Wait for ready
     retries = 0
@@ -763,12 +749,37 @@ async def proxy_to_llama(request: Request):
 #   /v1/images/*   OpenAI
 #   /sdapi/v1/*    AUTOMATIC1111 (what open-webui talks by default)
 #   /sdcpp/v1/*    native, also what sd-server's own WebUI uses
-# Unlike the text proxy there is no model name in these payloads, so the
-# caller picks the model beforehand (UI, /api/start) and this only forwards.
+# OpenAI image payloads carry a `model` field, so those switch models the same
+# way the text proxy does. The A1111 and native dialects have no model name, and
+# /v1/images/edits is multipart rather than JSON — those still rely on the caller
+# picking the model beforehand (UI, /api/start).
 IMAGE_PREFIXES = ("/v1/images/", "/sdapi/v1/", "/sdcpp/v1/")
 
 
+def _model_from_body(raw_body: bytes) -> Optional[str]:
+    """Model id from a JSON payload, or None for empty/non-JSON/model-less bodies."""
+    if not raw_body:
+        return None
+
+    try:
+        body = json.loads(raw_body)
+    except ValueError:
+        return None
+
+    if not isinstance(body, dict):
+        return None
+
+    model = body.get("model")
+    return model if isinstance(model, str) and model else None
+
+
 async def _proxy_to_current(request: Request, path: str):
+    raw_body = await request.body()
+
+    requested_model = _model_from_body(raw_body)
+    if requested_model:
+        _autoload_model(*_resolve_model(requested_model, "sd"))
+
     with state.lock:
         is_running = state.process is not None and state.process.poll() is None
         kind = state.current_kind
@@ -798,7 +809,6 @@ async def _proxy_to_current(request: Request, path: str):
         for k, v in request.headers.items()
         if k.lower() not in ("content-length", "host")
     }
-    raw_body = await request.body()
 
     try:
         client = httpx.AsyncClient()

@@ -816,16 +816,58 @@ async def proxy_to_llama(request: Request):
 #   /sdapi/v1/*    AUTOMATIC1111 (what open-webui talks by default)
 #   /sdcpp/v1/*    native, also what sd-server's own WebUI uses
 # OpenAI image payloads carry a `model` field, so those switch models the same
-# way the text proxy does. The A1111 and native dialects have no model name, and
-# /v1/images/edits is multipart rather than JSON — those still rely on the caller
-# picking the model beforehand (UI, /api/start).
+# way the text proxy does. The A1111 and native dialects have no model name and
+# still rely on the caller picking the model beforehand (UI, /api/start).
 IMAGE_PREFIXES = ("/v1/images/", "/sdapi/v1/", "/sdcpp/v1/")
 
+_BOUNDARY_RE = re.compile(r'boundary=(?:"([^"]+)"|([^\s;]+))', re.IGNORECASE)
 
-def _model_from_body(raw_body: bytes) -> Optional[str]:
-    """Model id from a JSON payload, or None for empty/non-JSON/model-less bodies."""
+
+def _model_from_multipart(raw_body: bytes, content_type: str) -> Optional[str]:
+    """Model id from the `model` form field of a multipart upload.
+
+    Walks part headers by offset so the file part, which can be tens of
+    megabytes, is never copied."""
+    match = _BOUNDARY_RE.search(content_type)
+    if not match:
+        return None
+
+    delimiter = b"--" + (match.group(1) or match.group(2)).encode("utf-8", "replace")
+    pos = 0
+    while True:
+        start = raw_body.find(delimiter, pos)
+        if start < 0:
+            return None
+
+        head_start = start + len(delimiter)
+        head_end = raw_body.find(b"\r\n\r\n", head_start)
+        if head_end < 0:
+            return None
+        pos = head_end + 4
+
+        head = raw_body[head_start:head_end].lower()
+        if b'name="model"' not in head or b"filename=" in head:
+            continue
+
+        end = raw_body.find(delimiter, pos)
+        value = raw_body[pos:end] if end >= 0 else raw_body[pos:]
+        if len(value) > 256:
+            return None  # not a model name, whatever it is
+
+        try:
+            model = value.decode("utf-8").strip()
+        except UnicodeDecodeError:
+            return None
+        return model or None
+
+
+def _model_from_body(raw_body: bytes, content_type: str = "") -> Optional[str]:
+    """Model id from a request body, or None when it names no model."""
     if not raw_body:
         return None
+
+    if content_type.lower().lstrip().startswith("multipart/form-data"):
+        return _model_from_multipart(raw_body, content_type)
 
     try:
         body = json.loads(raw_body)
@@ -842,7 +884,9 @@ def _model_from_body(raw_body: bytes) -> Optional[str]:
 async def _proxy_to_current(request: Request, path: str, kind: str = "sd"):
     raw_body = await request.body()
 
-    requested_model = _model_from_body(raw_body)
+    requested_model = _model_from_body(
+        raw_body, request.headers.get("content-type", "")
+    )
     if requested_model:
         _autoload_model(*_resolve_model(requested_model, kind))
 
@@ -925,8 +969,9 @@ async def proxy_sdcpp(request: Request, path: str):
 # OpenAI speech payloads carry a `model` field, so they switch models the same
 # way the text and image proxies do; tts-server itself only reads
 # input/voice/instructions/response_format/speed and ignores the rest.
-# Transcriptions are multipart, so they carry no model name and rely on the
-# caller having picked one (UI, /api/start).
+# Transcriptions name their model in a multipart field instead, which
+# _model_from_body reads, so they switch models too. llama-server ignores the
+# extra field, it only wants `file`.
 AUDIO_LLM_ENDPOINTS = ("transcriptions", "translations")
 
 

@@ -1,5 +1,6 @@
-flask
-pyyaml
-httpx
 fastapi
 uvicorn
+starlette
+pydantic
+pyyaml
+httpx

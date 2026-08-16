@@ -24,6 +24,14 @@ document.addEventListener('DOMContentLoaded', () => {
     // Once the field has been typed into, status polls stop overwriting it.
     ctxInput.addEventListener('input', () => { ctxInputPristine = false; });
 
+    const framesInput = document.getElementById('frames-input');
+    framesInput.addEventListener('keypress', function (e) {
+        if (e.key === 'Enter') {
+            applyFramesChange();
+        }
+    });
+    framesInput.addEventListener('input', () => { framesInputPristine = false; });
+
     // --- Theme Logic ---
     const themeBtn = document.getElementById('theme-toggle');
     const html = document.documentElement;
@@ -51,6 +59,7 @@ let currentConfig = {};
 let lastStatus = null;
 let currentLoadingModel = null; // Track which model is being loaded
 let ctxInputPristine = true; // Context field still mirrors the server, untouched
+let framesInputPristine = true; // Same for the tts frame cap
 
 async function fetchConfig() {
     try {
@@ -60,6 +69,9 @@ async function fetchConfig() {
         // Use the server's default context window as the source of truth.
         if (data.default_ctx) {
             document.getElementById('ctx-input').value = data.default_ctx;
+        }
+        if (data.default_frames) {
+            document.getElementById('frames-input').value = data.default_frames;
         }
         renderModelList(data.models || {});
     } catch (e) {
@@ -168,6 +180,10 @@ function handleQuantChange(key) {
 async function loadModel(key, quantization = null) {
     const ctxInput = document.getElementById('ctx-input');
     const ctx = parseInt(ctxInput.value) || 4096;
+    // Frames is tts-only and separate from ctx: they count different things
+    // and an llm-sized ctx would be a nonsensical frame cap.
+    const framesInput = document.getElementById('frames-input');
+    const frames = parseInt(framesInput.value) || 2048;
     
     currentLoadingModel = key;
     updateButtonsState(lastStatus); // Reflect loading state immediately
@@ -176,7 +192,7 @@ async function loadModel(key, quantization = null) {
         const res = await fetch('/api/start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model_key: key, quantization: quantization, ctx: ctx })
+            body: JSON.stringify({ model_key: key, quantization: quantization, ctx: ctx, frames: frames })
         });
         
         if (!res.ok) {
@@ -206,6 +222,13 @@ async function applyContextChange() {
     const currentModel = lastStatus.model;
     const currentQuant = lastStatus.quantization;
     loadModel(currentModel, currentQuant);
+}
+
+async function applyFramesChange() {
+    if (!lastStatus || !lastStatus.running || !lastStatus.model) {
+        return; // Nothing to do if stopped
+    }
+    loadModel(lastStatus.model, lastStatus.quantization);
 }
 
 async function stopServer() {
@@ -278,6 +301,13 @@ function updateStatusDisplay(status) {
         const ctxInput = document.getElementById('ctx-input');
         if (ctxInput && document.activeElement !== ctxInput) {
             ctxInput.value = status.selected_ctx;
+        }
+    }
+
+    if (framesInputPristine && status.selected_frames) {
+        const framesInput = document.getElementById('frames-input');
+        if (framesInput && document.activeElement !== framesInput) {
+            framesInput.value = status.selected_frames;
         }
     }
 
@@ -400,11 +430,13 @@ function applyDashboardKind(kind) {
     const sdStats = document.getElementById('stats-sd');
     const ttsStats = document.getElementById('stats-tts');
     const ctxControl = document.getElementById('ctx-control');
+    const framesControl = document.getElementById('frames-control');
 
     if (llmStats) llmStats.style.display = (isSd || isTts) ? 'none' : '';
     if (sdStats) sdStats.style.display = isSd ? '' : 'none';
     if (ttsStats) ttsStats.style.display = isTts ? '' : 'none';
     if (ctxControl) ctxControl.style.display = (isSd || isTts) ? 'none' : '';
+    if (framesControl) framesControl.style.display = isTts ? '' : 'none';
 }
 
 function updateActiveModel(status) {

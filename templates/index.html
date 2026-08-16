@@ -125,7 +125,15 @@
                                     <button id="apply-ctx-btn" class="btn btn-primary btn-sm" onclick="applyContextChange()">Apply</button>
                                 </div>
                             </div>
-                            
+
+                            <div class="control-group compact-group" id="frames-control" style="display: none;">
+                                <label for="frames-input" title="Audio frames, 12.5 per second. 2048 caps a clip at about 164 s; longer text is cut off mid-sentence.">Max Frames</label>
+                                <div class="input-wrapper">
+                                    <input type="number" id="frames-input" value="2048" min="64" step="256">
+                                    <button id="apply-frames-btn" class="btn btn-primary btn-sm" onclick="applyFramesChange()">Apply</button>
+                                </div>
+                            </div>
+
                             <div class="stat-box status-box">
                                 <span class="label">Current Model</span>
                                 <span class="value primary-text" id="current-model">-</span>

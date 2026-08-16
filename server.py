@@ -163,6 +163,7 @@ class ServiceState:
         self.current_model: Optional[str] = None
         self.current_quant: Optional[str] = None
         self.current_ctx: int = 0
+        self.current_frames: int = 0
         self.current_port: int = 0
         self.current_kind: Optional[str] = None
         self.default_ctx: int = 4096
@@ -170,6 +171,10 @@ class ServiceState:
         # so switching to an image model and back does not silently drop the
         # user's choice down to default_ctx.
         self.selected_ctx: int = 0
+        # Frame cap for tts, kept apart from the context window: 2048 frames
+        # at 12.5 per second is the ~164 s the talker defaults to.
+        self.default_frames: int = 2048
+        self.selected_frames: int = 0
         self.host: str = "0.0.0.0"
         self.ready: bool = False
         self.logs = deque(maxlen=2000)
@@ -419,6 +424,7 @@ class StartRequest(BaseModel):
     model_key: str
     quantization: Optional[str] = None
     ctx: Optional[int] = None
+    frames: Optional[int] = None
 
 
 # --- Internal Start Logic ---
@@ -478,7 +484,10 @@ def _autoload_model(model_key: str, quant: Optional[str]) -> None:
 
 
 def _start_model_server(
-    model_key: str, quantization: Optional[str] = None, ctx: Optional[int] = None
+    model_key: str,
+    quantization: Optional[str] = None,
+    ctx: Optional[int] = None,
+    frames: Optional[int] = None,
 ) -> Dict:
     if not state.config_mgr:
         raise RuntimeError("Config not initialized")
@@ -514,15 +523,23 @@ def _start_model_server(
     if ctx is None:
         ctx = state.selected_ctx or state.default_ctx
 
+    # ${FRAMES} is tts-only and deliberately NOT ${CTX}: they count different
+    # things (audio frames at 12.5/s against context tokens) and the llm value
+    # is orders of magnitude too large to mean anything as a frame cap.
+    if frames is None:
+        frames = state.selected_frames or state.default_frames
+
     # Find a free port
     port = find_free_port()
 
     cmd_str = cmd_template.replace("${PORT}", str(port))
     cmd_str = cmd_str.replace("${CTX}", str(ctx))
+    cmd_str = cmd_str.replace("${FRAMES}", str(frames))
     cmd_str = cmd_str.replace("${HOST}", state.host)
     # Fallback
     cmd_str = cmd_str.replace("$PORT", str(port))
     cmd_str = cmd_str.replace("$CTX", str(ctx))
+    cmd_str = cmd_str.replace("$FRAMES", str(frames))
     cmd_str = cmd_str.replace("$HOST", state.host)
 
     print(f"Starting model {model_key} on {state.host}:{port} with command: {cmd_str}")
@@ -548,6 +565,9 @@ def _start_model_server(
             state.current_ctx = ctx if kind == "llm" else 0
             if kind == "llm":
                 state.selected_ctx = ctx
+            state.current_frames = frames if kind == "tts" else 0
+            if kind == "tts":
+                state.selected_frames = frames
             state.current_port = port
             state.current_kind = kind
 
@@ -574,6 +594,7 @@ def get_config():
             "sections": {name: {} for name in SECTIONS},
             "kinds": {},
             "default_ctx": state.default_ctx,
+            "default_frames": state.default_frames,
         }
 
     models = state.config_mgr.get_models()
@@ -585,6 +606,7 @@ def get_config():
         },
         "kinds": {key: state.config_mgr.get_kind(key) for key in models},
         "default_ctx": state.default_ctx,
+        "default_frames": state.default_frames,
     }
 
 
@@ -679,6 +701,8 @@ def get_status():
             "kind": state.current_kind,
             "ctx": state.current_ctx,
             "selected_ctx": state.selected_ctx or state.default_ctx,
+            "frames": state.current_frames,
+            "selected_frames": state.selected_frames or state.default_frames,
             "port": state.current_port if is_running else None,
             "host": state.host,
             "pid": state.process.pid if state.process and is_running else None,
@@ -708,7 +732,9 @@ def stop_server():
 @app.post("/api/start")
 def start_server(req: StartRequest):
     try:
-        updated_data = _start_model_server(req.model_key, req.quantization, req.ctx)
+        updated_data = _start_model_server(
+            req.model_key, req.quantization, req.ctx, req.frames
+        )
         return {"status": "started", **updated_data}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

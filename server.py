@@ -166,6 +166,10 @@ class ServiceState:
         self.current_port: int = 0
         self.current_kind: Optional[str] = None
         self.default_ctx: int = 4096
+        # Context window last chosen for an llm. Survives sd loads and stops,
+        # so switching to an image model and back does not silently drop the
+        # user's choice down to default_ctx.
+        self.selected_ctx: int = 0
         self.host: str = "0.0.0.0"
         self.ready: bool = False
         self.logs = deque(maxlen=2000)
@@ -435,7 +439,7 @@ def _autoload_model(model_key: str, quant: Optional[str]) -> None:
 
     print(f"[Proxy] Auto-loading model: {model_key} (quant: {quant})")
     try:
-        _start_model_server(model_key, quant, state.current_ctx or state.default_ctx)
+        _start_model_server(model_key, quant)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except RuntimeError as e:
@@ -474,8 +478,10 @@ def _start_model_server(
         cmd_template = model_conf[quantization]
         actual_quant = quantization
 
-    # Determined context
-    ctx = ctx if ctx is not None else state.default_ctx
+    # Determined context: an explicit request wins, otherwise reuse the last
+    # context chosen for an llm, and only then fall back to the startup default.
+    if ctx is None:
+        ctx = state.selected_ctx or state.default_ctx
 
     # Find a free port
     port = find_free_port()
@@ -509,6 +515,8 @@ def _start_model_server(
             # sd-server has no context window; reporting one would drive the
             # context gauge in the UI off a number that means nothing there.
             state.current_ctx = ctx if kind == "llm" else 0
+            if kind == "llm":
+                state.selected_ctx = ctx
             state.current_port = port
             state.current_kind = kind
 
@@ -639,6 +647,7 @@ def get_status():
             "quantization": state.current_quant,
             "kind": state.current_kind,
             "ctx": state.current_ctx,
+            "selected_ctx": state.selected_ctx or state.default_ctx,
             "port": state.current_port if is_running else None,
             "host": state.host,
             "pid": state.process.pid if state.process and is_running else None,

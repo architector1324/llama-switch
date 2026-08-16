@@ -21,6 +21,8 @@ document.addEventListener('DOMContentLoaded', () => {
             applyContextChange();
         }
     });
+    // Once the field has been typed into, status polls stop overwriting it.
+    ctxInput.addEventListener('input', () => { ctxInputPristine = false; });
 
     // --- Theme Logic ---
     const themeBtn = document.getElementById('theme-toggle');
@@ -48,6 +50,7 @@ document.addEventListener('DOMContentLoaded', () => {
 let currentConfig = {};
 let lastStatus = null;
 let currentLoadingModel = null; // Track which model is being loaded
+let ctxInputPristine = true; // Context field still mirrors the server, untouched
 
 async function fetchConfig() {
     try {
@@ -211,31 +214,35 @@ async function stopServer() {
     currentLoadingModel = null;
 }
 
-function startPolling() {
-    // Status Poll
-    setInterval(async () => {
-        try {
-            const res = await fetch('/api/status');
-            const status = await res.json();
-            updateStatusDisplay(status);
-            updateActiveModel(status);
-            
-            // Clear loading state only when READY
-            if (currentLoadingModel && status.running && status.model === currentLoadingModel && status.ready) {
-                currentLoadingModel = null;
-            }
-            
-            // Also safety: if we were loading but server stopped or switched model
-            if (currentLoadingModel && (!status.running || (status.model && status.model !== currentLoadingModel))) {
-                currentLoadingModel = null;
-            }
-            
-            updateButtonsState(status);
-            
-        } catch (e) {
-            console.log("Status check failed", e);
+async function pollStatus() {
+    try {
+        const res = await fetch('/api/status');
+        const status = await res.json();
+        updateStatusDisplay(status);
+        updateActiveModel(status);
+
+        // Clear loading state only when READY
+        if (currentLoadingModel && status.running && status.model === currentLoadingModel && status.ready) {
+            currentLoadingModel = null;
         }
-    }, 5000);
+
+        // Also safety: if we were loading but server stopped or switched model
+        if (currentLoadingModel && (!status.running || (status.model && status.model !== currentLoadingModel))) {
+            currentLoadingModel = null;
+        }
+
+        updateButtonsState(status);
+
+    } catch (e) {
+        console.log("Status check failed", e);
+    }
+}
+
+function startPolling() {
+    // Status Poll. Run once right away so the context field shows the value the
+    // server actually remembers instead of the default for the first interval.
+    pollStatus();
+    setInterval(pollStatus, 5000);
 
     // Logs Poll
     setInterval(async () => {
@@ -263,6 +270,17 @@ function startPolling() {
 
 function updateStatusDisplay(status) {
     lastStatus = status;
+
+    // The server remembers the context window last chosen for an llm; mirror it
+    // so a page reload (or a switch to an image model and back) keeps the value
+    // instead of falling back to the startup default.
+    if (ctxInputPristine && status.selected_ctx) {
+        const ctxInput = document.getElementById('ctx-input');
+        if (ctxInput && document.activeElement !== ctxInput) {
+            ctxInput.value = status.selected_ctx;
+        }
+    }
+
     const indicator = document.getElementById('global-status');
     const statusText = document.getElementById('status-text');
     const modelText = document.getElementById('current-model');

@@ -68,7 +68,7 @@ async function fetchConfig() {
     }
 }
 
-const SECTION_LABELS = { llm: 'Language', sd: 'Image' };
+const SECTION_LABELS = { llm: 'Language', sd: 'Image', tts: 'Speech' };
 
 function renderModelList(models) {
     const list = document.getElementById('model-list');
@@ -315,6 +315,26 @@ function updateStatusDisplay(status) {
 
             const imgEl = document.getElementById('stat-sd-images');
             if (imgEl) imgEl.innerText = s.sd_images || 0;
+        } else if (status.stats && status.kind === 'tts') {
+            const s = status.stats;
+
+            // RTF below 1 means faster than real time; show the multiple, it
+            // reads better than 0.22.
+            const rtfEl = document.getElementById('stat-tts-rtf');
+            if (rtfEl) rtfEl.innerText = s.tts_rtf ? `${(1 / s.tts_rtf).toFixed(1)}x realtime` : '-';
+
+            const lastEl = document.getElementById('stat-tts-last');
+            if (lastEl) {
+                lastEl.innerText = s.tts_audio
+                    ? `${s.tts_audio.toFixed(1)} s / ${s.tts_last_time.toFixed(1)} s`
+                    : '-';
+            }
+
+            const frEl = document.getElementById('stat-tts-frames');
+            if (frEl) frEl.innerText = s.tts_frames || '-';
+
+            const clEl = document.getElementById('stat-tts-clips');
+            if (clEl) clEl.innerText = s.tts_clips || 0;
         } else if (status.stats) {
             const used = status.stats.ctx_used || 0;
             const limit = status.ctx || 0; // Use status.ctx as the limit source
@@ -362,24 +382,29 @@ function updateStatusDisplay(status) {
         const totalTokensEl = document.getElementById('stat-total-tokens');
         if(totalTokensEl) totalTokensEl.innerText = '-';
 
-        ['stat-sd-speed', 'stat-sd-last', 'stat-sd-progress', 'stat-sd-images'].forEach(id => {
+        ['stat-sd-speed', 'stat-sd-last', 'stat-sd-progress', 'stat-sd-images',
+         'stat-tts-rtf', 'stat-tts-last', 'stat-tts-frames', 'stat-tts-clips'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.innerText = '-';
         });
     }
 }
 
-// sd-server has no context window and reports seconds per step instead of
-// tokens per second, so the two backends get different stat boxes.
+// Each backend reports something different: llama.cpp tokens per second,
+// sd-server seconds per step, tts-server a real-time factor. One stat block
+// each, and neither sd nor tts has a context window to set.
 function applyDashboardKind(kind) {
     const isSd = kind === 'sd';
+    const isTts = kind === 'tts';
     const llmStats = document.getElementById('stats-llm');
     const sdStats = document.getElementById('stats-sd');
+    const ttsStats = document.getElementById('stats-tts');
     const ctxControl = document.getElementById('ctx-control');
 
-    if (llmStats) llmStats.style.display = isSd ? 'none' : '';
+    if (llmStats) llmStats.style.display = (isSd || isTts) ? 'none' : '';
     if (sdStats) sdStats.style.display = isSd ? '' : 'none';
-    if (ctxControl) ctxControl.style.display = isSd ? 'none' : '';
+    if (ttsStats) ttsStats.style.display = isTts ? '' : 'none';
+    if (ctxControl) ctxControl.style.display = (isSd || isTts) ? 'none' : '';
 }
 
 function updateActiveModel(status) {

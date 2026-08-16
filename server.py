@@ -47,7 +47,7 @@ def find_free_port():
 
 
 # --- Config Manager ---
-SECTIONS = ("llm", "sd")
+SECTIONS = ("llm", "sd", "tts")
 
 
 class ConfigManager:
@@ -189,6 +189,13 @@ class ServiceState:
             "sd_last_time": 0.0,
             "sd_images": 0,
             "sd_size": "",
+            # tts-server: frames arrive in batches of 8 while generating, the
+            # totals land in one [Perf] line when the clip is done.
+            "tts_frames": 0,
+            "tts_rtf": 0.0,
+            "tts_audio": 0.0,
+            "tts_last_time": 0.0,
+            "tts_clips": 0,
         }
 
 
@@ -296,6 +303,14 @@ def log_reader(proc, log_queue):
     # [INFO ] stable-diffusion.cpp:5592 - generate_image 1024x1024
     re_sd_size = re.compile(r"generate_image\s+(\d+)x(\d+)")
 
+    # qwentts.cpp progress: "[Pipeline] Generated 1920 frames (slot 0)"
+    re_tts_step = re.compile(r"\[Pipeline\] Generated (\d+) frames")
+
+    # "[Perf] Total 36762.3 ms (2048 frames, 16.67 ms/frame AR, audio 163.84 s, RTF 0.224)"
+    re_tts_done = re.compile(
+        r"\[Perf\] Total\s+([\d\.]+)\s*ms\s*\((\d+)\s*frames.*?audio\s+([\d\.]+)\s*s,\s*RTF\s+([\d\.]+)\)"
+    )
+
     try:
         for decoded in _iter_output_chunks(proc):
             if decoded:
@@ -376,6 +391,22 @@ def log_reader(proc, log_queue):
                         with state.lock:
                             state.stats["sd_size"] = f"{zm.group(1)}x{zm.group(2)}"
                             state.stats["sd_step"] = 0
+
+                    # --- tts-server ---
+
+                    tm = re_tts_step.search(decoded)
+                    if tm:
+                        with state.lock:
+                            state.stats["tts_frames"] = int(tm.group(1))
+
+                    td = re_tts_done.search(decoded)
+                    if td:
+                        with state.lock:
+                            state.stats["tts_last_time"] = float(td.group(1)) / 1000.0
+                            state.stats["tts_frames"] = int(td.group(2))
+                            state.stats["tts_audio"] = float(td.group(3))
+                            state.stats["tts_rtf"] = float(td.group(4))
+                            state.stats["tts_clips"] += 1
                 except Exception as e:
                     print(f"[Service] Log parsing error: {e}")
 
@@ -782,24 +813,24 @@ def _model_from_body(raw_body: bytes) -> Optional[str]:
     return model if isinstance(model, str) and model else None
 
 
-async def _proxy_to_current(request: Request, path: str):
+async def _proxy_to_current(request: Request, path: str, kind: str = "sd"):
     raw_body = await request.body()
 
     requested_model = _model_from_body(raw_body)
     if requested_model:
-        _autoload_model(*_resolve_model(requested_model, "sd"))
+        _autoload_model(*_resolve_model(requested_model, kind))
 
     with state.lock:
         is_running = state.process is not None and state.process.poll() is None
-        kind = state.current_kind
+        current_kind = state.current_kind
         port = state.current_port
 
     if not is_running:
         raise HTTPException(status_code=503, detail="No model is running")
-    if kind != "sd":
+    if current_kind != kind:
         raise HTTPException(
             status_code=409,
-            detail=f"Current model is '{kind}', load an sd model first",
+            detail=f"Current model is '{current_kind}', load a {kind} model first",
         )
 
     retries = 0
@@ -857,6 +888,16 @@ async def proxy_sdapi(request: Request, path: str):
 @app.api_route("/sdcpp/v1/{path:path}", methods=["GET", "POST"])
 async def proxy_sdcpp(request: Request, path: str):
     return await _proxy_to_current(request, f"sdcpp/v1/{path}")
+
+
+# --- Audio proxy ---
+# qwentts.cpp's tts-server serves /v1/audio/speech, /v1/audio/voices and
+# /v1/models. OpenAI speech payloads carry a `model` field, so they switch
+# models the same way the text and image proxies do; tts-server itself only
+# reads input/voice/instructions/response_format/speed and ignores the rest.
+@app.api_route("/v1/audio/{path:path}", methods=["GET", "POST"])
+async def proxy_audio(request: Request, path: str):
+    return await _proxy_to_current(request, f"v1/audio/{path}", kind="tts")
 
 
 # --- Static files ---

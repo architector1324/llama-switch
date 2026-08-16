@@ -799,10 +799,15 @@ async def proxy_to_llama(request: Request):
             await r.aclose()
             await client.aclose()
 
+        content_type = r.headers.get("content-type") or ""
+        body = r.aiter_bytes()
+        if r.status_code == 200:
+            body = _clean_chat(body, content_type)
+
         return StreamingResponse(
-            r.aiter_bytes(),
+            body,
             status_code=r.status_code,
-            media_type=r.headers.get("content-type"),
+            media_type=content_type or None,
             background=BackgroundTask(cleanup),
         )
 
@@ -824,10 +829,12 @@ _BOUNDARY_RE = re.compile(r'boundary=(?:"([^"]+)"|([^\s;]+))', re.IGNORECASE)
 
 
 def _model_from_multipart(raw_body: bytes, content_type: str) -> Optional[str]:
-    """Model id from the `model` form field of a multipart upload.
+    """Model id from a `model` form field of a multipart upload.
 
-    Walks part headers by offset so the file part, which can be tens of
-    megabytes, is never copied."""
+    Endpoints that take a file — audio transcriptions, image edits — send the
+    model id as one short text part sitting next to a file part that can be tens
+    of megabytes. Walk the part headers by offset rather than splitting the body,
+    so the upload itself is never copied."""
     match = _BOUNDARY_RE.search(content_type)
     if not match:
         return None
@@ -881,7 +888,12 @@ def _model_from_body(raw_body: bytes, content_type: str = "") -> Optional[str]:
     return model if isinstance(model, str) and model else None
 
 
-async def _proxy_to_current(request: Request, path: str, kind: str = "sd"):
+async def _proxy_to_current(
+    request: Request,
+    path: str,
+    kind: str = "sd",
+    rewrite: Optional[Callable] = None,
+):
     raw_body = await request.body()
 
     requested_model = _model_from_body(
@@ -935,10 +947,15 @@ async def _proxy_to_current(request: Request, path: str, kind: str = "sd"):
             await r.aclose()
             await client.aclose()
 
+        content_type = r.headers.get("content-type") or ""
+        body = r.aiter_bytes()
+        if rewrite is not None and r.status_code == 200:
+            body = rewrite(body, content_type)
+
         return StreamingResponse(
-            r.aiter_bytes(),
+            body,
             status_code=r.status_code,
-            media_type=r.headers.get("content-type"),
+            media_type=content_type or None,
             background=BackgroundTask(cleanup),
         )
     except Exception as e:
@@ -971,22 +988,206 @@ async def proxy_sdcpp(request: Request, path: str):
 # input/voice/instructions/response_format/speed and ignores the rest.
 # Transcriptions name their model in a multipart field instead, which
 # _model_from_body reads, so they switch models too. llama-server ignores the
-# extra field, it only wants `file`.
+# extra field — it only wants `file`.
 AUDIO_LLM_ENDPOINTS = ("transcriptions", "translations")
+
+# Qwen3-ASR prefixes its answer with "language <Name><asr_text>" and llama-server
+# forwards it verbatim. Upstream bug ggml-org/llama.cpp#26749; vllm strips it too.
+# Drop all of this once llama.cpp stops emitting it.
+_ASR_TAG = "<asr_text>"
+_ASR_LANG_PREFIX = "language "
+_ASR_HEADER_LIMIT = 64
+
+
+def _asr_header_forming(head: str) -> bool:
+    # True while the text could still grow into the header rather than a transcript.
+    head = head.lstrip()
+    if len(head) >= _ASR_HEADER_LIMIT or "\n" in head:
+        return False
+    return _ASR_LANG_PREFIX.startswith(head) or head.startswith(_ASR_LANG_PREFIX)
+
+
+def _strip_asr_header(text: str) -> str:
+    head, tag, rest = text.partition(_ASR_TAG)
+    return rest if tag and _asr_header_forming(head) else text
+
+
+class _AsrHeaderFilter:
+    # The header arrives one token at a time, so hold deltas back until it resolves.
+    def __init__(self):
+        self.held = ""
+        self.settled = False
+
+    def feed(self, delta: str) -> str:
+        if self.settled:
+            return delta
+        self.held += delta
+        if _ASR_TAG in self.held:
+            out = _strip_asr_header(self.held)
+        elif _asr_header_forming(self.held):
+            return ""
+        else:
+            out = self.held
+        self.settled, self.held = True, ""
+        return out
+
+    def flush(self) -> str:
+        # A stream can end while the header is still undecided; nothing may be lost.
+        out, self.held, self.settled = self.held, "", True
+        return out
+
+
+def _sse_line(event: Dict) -> bytes:
+    return b"data: " + json.dumps(event, ensure_ascii=False).encode() + b"\n"
+
+
+async def _read_body(chunks) -> Tuple[bytes, Optional[Dict]]:
+    body = b"".join([chunk async for chunk in chunks])
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        return body, None
+    return body, payload if isinstance(payload, dict) else None
+
+
+async def _rewrite_sse(chunks, edit: Callable[[Dict], bool], finish: Callable[[], bytes]):
+    # edit() mutates one event and says whether it changed it; finish() releases
+    # whatever edit() is still holding, before the terminal sentinel or the end.
+    buf = b""
+    released = False
+
+    def release() -> bytes:
+        nonlocal released
+        if released:
+            return b""
+        released = True
+        return finish()
+
+    def line_out(line: bytes) -> bytes:
+        if not line.startswith(b"data: "):
+            return line + b"\n"
+        try:
+            event = json.loads(line[6:])
+        except ValueError:
+            return release() + line + b"\n"
+        if not isinstance(event, dict) or not edit(event):
+            return line + b"\n"
+        return _sse_line(event)
+
+    async for chunk in chunks:
+        buf += chunk
+        while b"\n" in buf:
+            line, _, buf = buf.partition(b"\n")
+            yield line_out(line.rstrip(b"\r"))
+    if buf:
+        yield line_out(buf.rstrip(b"\r"))
+    yield release()
+
+
+async def _clean_transcription(chunks, content_type: str):
+    if "text/event-stream" not in content_type:
+        body, payload = await _read_body(chunks)
+        if payload and isinstance(payload.get("text"), str):
+            cleaned = _strip_asr_header(payload["text"])
+            if cleaned != payload["text"]:
+                payload["text"] = cleaned
+                body = json.dumps(payload, ensure_ascii=False).encode()
+        yield body
+        return
+
+    header = _AsrHeaderFilter()
+    last: Optional[Dict] = None
+
+    def edit(event: Dict) -> bool:
+        nonlocal last
+        # The closing event repeats the whole transcript, header included.
+        if isinstance(event.get("text"), str):
+            cleaned = _strip_asr_header(event["text"])
+            if cleaned != event["text"]:
+                event["text"] = cleaned
+                return True
+            return False
+        if isinstance(event.get("delta"), str):
+            last = event
+            cleaned = header.feed(event["delta"])
+            if cleaned != event["delta"]:
+                event["delta"] = cleaned
+                return True
+        return False
+
+    def finish() -> bytes:
+        held = header.flush()
+        if not held or last is None:
+            return b""
+        last["delta"] = held
+        return _sse_line(last) + b"\n"
+
+    async for out in _rewrite_sse(chunks, edit, finish):
+        yield out
+
+
+async def _clean_chat(chunks, content_type: str):
+    if "text/event-stream" not in content_type:
+        body, payload = await _read_body(chunks)
+        changed = False
+        for choice in (payload or {}).get("choices") or []:
+            message = choice.get("message") or {}
+            if isinstance(message.get("content"), str):
+                cleaned = _strip_asr_header(message["content"])
+                if cleaned != message["content"]:
+                    message["content"] = cleaned
+                    changed = True
+        if changed:
+            body = json.dumps(payload, ensure_ascii=False).encode()
+        yield body
+        return
+
+    header = _AsrHeaderFilter()
+    last: Optional[Dict] = None
+
+    def edit(event: Dict) -> bool:
+        nonlocal last
+        changed = False
+        for choice in event.get("choices") or []:
+            delta = choice.get("delta") or {}
+            if isinstance(delta.get("content"), str):
+                last = event
+                cleaned = header.feed(delta["content"])
+                if cleaned != delta["content"]:
+                    delta["content"] = cleaned
+                    changed = True
+        return changed
+
+    def finish() -> bytes:
+        held = header.flush()
+        if not held or last is None:
+            return b""
+        for choice in last.get("choices") or []:
+            if isinstance((choice.get("delta") or {}).get("content"), str):
+                choice["delta"]["content"] = held
+        return _sse_line(last) + b"\n"
+
+    async for out in _rewrite_sse(chunks, edit, finish):
+        yield out
 
 
 @app.api_route("/v1/audio/{path:path}", methods=["GET", "POST", "DELETE"])
 async def proxy_audio(request: Request, path: str):
     head = path.split("/", 1)[0]
-    kind = "llm" if head in AUDIO_LLM_ENDPOINTS else "tts"
-    return await _proxy_to_current(request, f"v1/audio/{path}", kind=kind)
+    is_asr = head in AUDIO_LLM_ENDPOINTS
+    return await _proxy_to_current(
+        request,
+        f"v1/audio/{path}",
+        kind="llm" if is_asr else "tts",
+        rewrite=_clean_transcription if is_asr else None,
+    )
 
 
-# tts-server's own page, republished under this fixed origin. It is served on
-# a port that find_free_port() picks anew on every load, so linking straight
-# at it means a different origin each time — no cert matches it and no browser
-# exception survives. Behind /tts/ it inherits whatever TLS this process has,
-# which is what getUserMedia needs to hand over the microphone.
+# Engine WebUIs, republished under this fixed origin. They live on a port
+# find_free_port() picks anew on every load, so linking straight at one means a
+# different origin each time: no cert matches it, no browser exception survives,
+# and getUserMedia refuses to hand over the microphone. Both pages build their
+# requests relative to the document, so a subpath needs no changes upstream.
 @app.get("/tts")
 async def tts_ui_slash():
     return RedirectResponse("/tts/")
@@ -995,6 +1196,16 @@ async def tts_ui_slash():
 @app.api_route("/tts/{path:path}", methods=["GET", "POST", "DELETE"])
 async def proxy_tts_ui(request: Request, path: str):
     return await _proxy_to_current(request, path, kind="tts")
+
+
+@app.get("/llm")
+async def llm_ui_slash():
+    return RedirectResponse("/llm/")
+
+
+@app.api_route("/llm/{path:path}", methods=["GET", "POST", "DELETE"])
+async def proxy_llm_ui(request: Request, path: str):
+    return await _proxy_to_current(request, path, kind="llm", rewrite=_clean_chat)
 
 
 # --- Static files ---

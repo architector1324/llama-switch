@@ -385,10 +385,10 @@ function updateStatusDisplay(status) {
         // WebUI Button
         if (status.ready) {
             webuiBtn.style.display = 'inline-block';
-            // tts-server's page goes through our own /tts/ so it inherits this
-            // origin's TLS; sd-server's is linked straight at its port.
-            if (status.kind === 'tts') {
-                webuiBtn.href = '/tts/';
+            // Republished pages inherit this origin's TLS; sd-server's is not one
+            // of them yet and is linked straight at its port.
+            if (status.kind === 'tts' || status.kind === 'llm') {
+                webuiBtn.href = `/${status.kind}/`;
             } else {
                 const displayHost = (status.host === '0.0.0.0') ? window.location.hostname : status.host;
                 webuiBtn.href = `http://${displayHost}:${status.port}`;

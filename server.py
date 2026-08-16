@@ -236,8 +236,7 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
 def _iter_output_chunks(proc):
-    """Split on CR too: sd-server redraws progress in place and readline() would
-    hold a whole run back until the last step."""
+    """Split on CR too: sd-server redraws progress in place, without LF."""
     buf = ""
     while True:
         chunk = proc.stdout.read(1)
@@ -261,9 +260,7 @@ def log_reader(proc, log_queue):
         r"prompt eval time\s*=\s*[\d\.]+\s*ms\s*/\s*\d+\s*tokens\s*\(\s*[\d\.]+\s*ms per token,\s*([\d\.]+)\s*tokens per second\)"
     )
 
-    # eval time =     492.12 ms /     9 tokens (   54.68 ms per token,    18.29 tokens per second)
-    # The lookbehind separates this from "prompt eval time"; the line is prefixed
-    # with "<ts> I slot print_timing: id 0 | task 0 |" so ^ does not work.
+    # Same line as above minus the "prompt " prefix; ^ fails on the log's prefix.
     re_eval = re.compile(
         r"(?<!prompt )eval time\s*=\s*[\d\.]+\s*ms\s*/\s*(\d+)\s*tokens\s*\(\s*[\d\.]+\s*ms per token,\s*([\d\.]+)\s*tokens per second\)"
     )
@@ -293,8 +290,7 @@ def log_reader(proc, log_queue):
             if decoded:
                 log_queue.append(decoded)
 
-                # Substrings that survive llama.cpp log format changes:
-                # "main:" became "llama_server:" and the wording shifted.
+                # Substrings that survive llama.cpp log renames ("main:" -> "llama_server:").
                 if (
                     "model loaded" in decoded
                     or '"msg":"model loaded"' in decoded
@@ -397,9 +393,7 @@ def _default_quant(model_conf: Dict) -> Optional[str]:
 
 
 def _resolve_model(requested_model: str, kind: str) -> Tuple[str, Optional[str]]:
-    """Resolve an OpenAI model id to (model_key, quantization) inside one kind.
-
-    A bare id takes the default quant, a `<model>-<quant>` suffix an explicit one."""
+    """Model id to (model_key, quant); a bare id means the first-listed quant."""
     if not state.config_mgr:
         raise HTTPException(status_code=500, detail="Config not initialized")
 
@@ -477,8 +471,7 @@ def _start_model_server(
     if ctx is None:
         ctx = state.selected_ctx or state.default_ctx
 
-    # Deliberately not ${CTX}: frames at 12.5/s and context tokens are unrelated,
-    # and the llm value is far too large to work as a frame cap.
+    # Deliberately not ${CTX}: an llm context window is far too big for a frame cap.
     if frames is None:
         frames = state.selected_frames or state.default_frames
 
@@ -753,21 +746,14 @@ async def proxy_to_llama(request: Request):
         raise HTTPException(status_code=500, detail=f"Proxy error: {str(e)}")
 
 
-# --- Image proxy ---
-# sd-server speaks three dialects at once, so forward all of them verbatim:
-#   /v1/images/*   OpenAI, the only one carrying a model name
-#   /sdapi/v1/*    AUTOMATIC1111, what open-webui talks by default
-#   /sdcpp/v1/*    native, what sd-server's own WebUI uses
+# --- Image proxy: /v1/images/* OpenAI, /sdapi/v1/* A1111, /sdcpp/v1/* native ---
 IMAGE_PREFIXES = ("/v1/images/", "/sdapi/v1/", "/sdcpp/v1/")
 
 _BOUNDARY_RE = re.compile(r'boundary=(?:"([^"]+)"|([^\s;]+))', re.IGNORECASE)
 
 
 def _model_from_multipart(raw_body: bytes, content_type: str) -> Optional[str]:
-    """Model id from the `model` form field of a multipart upload.
-
-    Walks part headers by offset so the file part, which can be tens of
-    megabytes, is never copied."""
+    """Model id from a multipart `model` field, without copying the file part."""
     match = _BOUNDARY_RE.search(content_type)
     if not match:
         return None
@@ -910,15 +896,10 @@ async def proxy_sdcpp(request: Request, path: str):
     return await _proxy_to_current(request, f"sdcpp/v1/{path}")
 
 
-# --- Audio proxy ---
-# /v1/audio is split ground: tts-server owns speech and the voice registry,
-# while transcriptions and translations are llama-server's own ASR endpoints.
-# Sending the whole prefix to tts would 409 every transcription.
+# --- Audio proxy: speech and voices are tts, transcriptions are llama-server ---
 AUDIO_LLM_ENDPOINTS = ("transcriptions", "translations")
 
-# Qwen3-ASR prefixes its answer with "language <Name><asr_text>" and llama-server
-# forwards it verbatim. Upstream bug ggml-org/llama.cpp#26749; vllm strips it too.
-# Drop all of this once llama.cpp stops emitting it.
+# Qwen3-ASR answers with a "language <Name><asr_text>" header: llama.cpp#26749.
 _ASR_TAG = "<asr_text>"
 _ASR_LANG_PREFIX = "language "
 _ASR_HEADER_LIMIT = 64
@@ -976,8 +957,7 @@ async def _read_body(chunks) -> Tuple[bytes, Optional[Dict]]:
 
 
 async def _rewrite_sse(chunks, edit: Callable[[Dict], bool], finish: Callable[[], bytes]):
-    # edit() mutates one event and says whether it changed it; finish() releases
-    # whatever edit() is still holding, before the terminal sentinel or the end.
+    # edit() rewrites one event; finish() releases whatever edit() still holds.
     buf = b""
     released = False
 
@@ -1108,10 +1088,7 @@ async def proxy_audio(request: Request, path: str):
     )
 
 
-# Engine WebUIs republished on this origin, so they inherit its TLS and its
-# certificate. Linked directly they would sit on a port find_free_port() picks
-# anew every load, which no certificate matches and getUserMedia rejects.
-# Both pages fetch relative to the document, so a subpath needs no upstream change.
+# Republished here so engine UIs inherit this TLS; their own port moves every load.
 @app.get("/tts")
 async def tts_ui_slash():
     return RedirectResponse("/tts/")
@@ -1166,8 +1143,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "-w", "--watch", action="store_true", help="Watch config file for changes"
     )
-    # localhost is the only plain-http origin browsers call a secure context,
-    # so TLS is what makes the microphone work from another device.
+    # localhost is the only plain-http secure context, so TLS frees the microphone.
     parser.add_argument(
         "--tls-cert", type=str, default=None, help="TLS certificate (PEM), enables https"
     )

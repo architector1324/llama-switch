@@ -361,8 +361,7 @@ function updateStatusDisplay(status) {
 
         if (status.ready) {
             webuiBtn.style.display = 'inline-block';
-            // Republished pages inherit this origin's TLS; sd-server's is not one
-            // of them yet and is linked straight at its port.
+            // Republished pages inherit this TLS; sd-server is still on its own port.
             if (status.kind === 'tts' || status.kind === 'llm') {
                 webuiBtn.href = `/${status.kind}/`;
             } else {
@@ -400,8 +399,7 @@ function updateStatusDisplay(status) {
     }
 }
 
-// One stat block per backend: tokens per second, seconds per step, or a
-// real-time factor. Neither sd nor tts has a context window to set.
+// One stat block per backend, and only llm has a context window to set.
 function applyDashboardKind(kind) {
     const isSd = kind === 'sd';
     const isTts = kind === 'tts';

@@ -77,7 +77,7 @@ tts:
 - `-c ${CTX}`: sets the context window (controllable via UI).
 - `--max-new ${FRAMES}`: caps clip length (controllable via UI).
 
-**Default quantization:** the **first** quant listed for a model is its default. Through the OpenAI-compatible API (`/v1/models`, `/v1/chat/completions`, …) that default is exposed under the bare model id (e.g. `qwen-3`), while the rest get a `-<quant>` suffix (e.g. `qwen-3-q8_k_xl`). Requesting the bare id loads the first-listed quant, so order each model's variants with the preferred one first.
+**Default quantization:** the **first** quant listed for a model is its default. Through the OpenAI-compatible API (`/v1/models`, `/v1/chat/completions`) that default is exposed under the bare model id (e.g. `qwen-3`), while the rest get a `-<quant>` suffix (e.g. `qwen-3-q8_k_xl`). Requesting the bare id loads the first-listed quant, so order each model's variants with the preferred one first.
 
 **Model ids are global.** If the same key appears in two sections, the first one wins in `llm` → `sd` → `tts` order and the duplicate is logged and skipped.
 

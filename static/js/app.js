@@ -385,8 +385,14 @@ function updateStatusDisplay(status) {
         // WebUI Button
         if (status.ready) {
             webuiBtn.style.display = 'inline-block';
-            const displayHost = (status.host === '0.0.0.0') ? window.location.hostname : status.host;
-            webuiBtn.href = `http://${displayHost}:${status.port}`;
+            // tts-server's page goes through our own /tts/ so it inherits this
+            // origin's TLS; sd-server's is linked straight at its port.
+            if (status.kind === 'tts') {
+                webuiBtn.href = '/tts/';
+            } else {
+                const displayHost = (status.host === '0.0.0.0') ? window.location.hostname : status.host;
+                webuiBtn.href = `http://${displayHost}:${status.port}`;
+            }
         } else {
             webuiBtn.style.display = 'none';
         }

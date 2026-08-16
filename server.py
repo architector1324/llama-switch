@@ -16,7 +16,7 @@ import httpx
 import uvicorn
 import yaml
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
@@ -917,13 +917,39 @@ async def proxy_sdcpp(request: Request, path: str):
 
 
 # --- Audio proxy ---
-# qwentts.cpp's tts-server serves /v1/audio/speech, /v1/audio/voices and
-# /v1/models. OpenAI speech payloads carry a `model` field, so they switch
-# models the same way the text and image proxies do; tts-server itself only
-# reads input/voice/instructions/response_format/speed and ignores the rest.
-@app.api_route("/v1/audio/{path:path}", methods=["GET", "POST"])
+# /v1/audio is shared ground: qwentts.cpp's tts-server owns speech and the
+# voice registry, while transcriptions and translations are llama-server's own
+# ASR endpoints and belong to an llm profile. Routing the whole prefix to tts
+# would 409 every transcription with "load a tts model first".
+#
+# OpenAI speech payloads carry a `model` field, so they switch models the same
+# way the text and image proxies do; tts-server itself only reads
+# input/voice/instructions/response_format/speed and ignores the rest.
+# Transcriptions are multipart, so they carry no model name and rely on the
+# caller having picked one (UI, /api/start).
+AUDIO_LLM_ENDPOINTS = ("transcriptions", "translations")
+
+
+@app.api_route("/v1/audio/{path:path}", methods=["GET", "POST", "DELETE"])
 async def proxy_audio(request: Request, path: str):
-    return await _proxy_to_current(request, f"v1/audio/{path}", kind="tts")
+    head = path.split("/", 1)[0]
+    kind = "llm" if head in AUDIO_LLM_ENDPOINTS else "tts"
+    return await _proxy_to_current(request, f"v1/audio/{path}", kind=kind)
+
+
+# tts-server's own page, republished under this fixed origin. It is served on
+# a port that find_free_port() picks anew on every load, so linking straight
+# at it means a different origin each time — no cert matches it and no browser
+# exception survives. Behind /tts/ it inherits whatever TLS this process has,
+# which is what getUserMedia needs to hand over the microphone.
+@app.get("/tts")
+async def tts_ui_slash():
+    return RedirectResponse("/tts/")
+
+
+@app.api_route("/tts/{path:path}", methods=["GET", "POST", "DELETE"])
+async def proxy_tts_ui(request: Request, path: str):
+    return await _proxy_to_current(request, path, kind="tts")
 
 
 # --- Static files ---
@@ -960,8 +986,20 @@ if __name__ == "__main__":
     parser.add_argument(
         "-w", "--watch", action="store_true", help="Watch config file for changes"
     )
+    # Browsers gate getUserMedia and friends behind a secure context, and
+    # localhost is the only plain-http origin that counts as one. Serving the
+    # UI over TLS is what makes the microphone reachable from another device.
+    parser.add_argument(
+        "--tls-cert", type=str, default=None, help="TLS certificate (PEM), enables https"
+    )
+    parser.add_argument(
+        "--tls-key", type=str, default=None, help="TLS private key (PEM)"
+    )
 
     args = parser.parse_args()
+
+    if bool(args.tls_cert) != bool(args.tls_key):
+        parser.error("--tls-cert and --tls-key go together")
 
     # Store default ctx
     state.default_ctx = args.ctx
@@ -972,5 +1010,12 @@ if __name__ == "__main__":
         args.config, watch=args.watch, on_change=on_config_change
     )
 
-    print(f"Starting UI on {args.host}:{args.port}")
-    uvicorn.run(app, host=args.host, port=args.port)
+    scheme = "https" if args.tls_cert else "http"
+    print(f"Starting UI on {scheme}://{args.host}:{args.port}")
+    uvicorn.run(
+        app,
+        host=args.host,
+        port=args.port,
+        ssl_certfile=args.tls_cert,
+        ssl_keyfile=args.tls_key,
+    )

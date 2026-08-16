@@ -12,14 +12,12 @@
         <header class="header">
             <div class="logo">llama-switch</div>
             <nav class="nav">
-                <!-- <a href="#" class="active">Models</a> -->
                 <button id="theme-toggle" title="Switch Theme"></button>
                 <div class="status-indicator" id="global-status"></div>
             </nav>
         </header>
 
         <main class="main-content">
-            <!-- Left Panel: Models -->
             <section class="panel models-panel">
                 <div class="panel-header">
                     <h2>Models</h2>
@@ -32,21 +30,17 @@
                     <span>Action</span>
                 </div>
                 <div id="model-list" class="model-list">
-                    <!-- Models injected here -->
                     <div class="loading">Loading configuration...</div>
                 </div>
             </section>
 
-            <!-- Right Panel: Controls & Logs -->
             <section class="right-column">
-                <!-- Controls Card -->
                 <div class="panel controls-panel">
                     <div class="panel-header">
                         <h2>Dashboard</h2>
                     </div>
                     
                     <div class="dashboard-grid">
-                        <!-- Left Column: Stats -->
                         <div class="dash-column stats-column">
                             <div id="stats-llm">
                                 <div class="stat-row">
@@ -116,7 +110,6 @@
                             </div>
                         </div>
 
-                        <!-- Right Column: Settings & Status -->
                         <div class="dash-column settings-column">
                             <div class="control-group compact-group" id="ctx-control">
                                 <label for="ctx-input">Context Window</label>
@@ -147,7 +140,6 @@
                     </div>
                 </div>
 
-                <!-- Logs Card -->
                 <div class="panel logs-panel">
                     <div class="panel-header">
                         <h2>Upstream Logs</h2>

@@ -2,7 +2,6 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchConfig();
     startPolling();
     
-    // Setup mobile touch support for log buttons
     const clearBtn = document.getElementById('clear-logs-btn');
     const scrollBtn = document.getElementById('scroll-logs-btn');
     if (clearBtn) {
@@ -14,14 +13,13 @@ document.addEventListener('DOMContentLoaded', () => {
         setupMobileButton(scrollBtn, scrollToBottom);
     }
     
-    // Context Enter Listener
     const ctxInput = document.getElementById('ctx-input');
     ctxInput.addEventListener('keypress', function (e) {
         if (e.key === 'Enter') {
             applyContextChange();
         }
     });
-    // Once the field has been typed into, status polls stop overwriting it.
+    // Once typed into, status polls stop overwriting the field.
     ctxInput.addEventListener('input', () => { ctxInputPristine = false; });
 
     const framesInput = document.getElementById('frames-input');
@@ -36,7 +34,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const themeBtn = document.getElementById('theme-toggle');
     const html = document.documentElement;
 
-    // Load saved
     const savedTheme = localStorage.getItem('theme') || 'dark';
     html.setAttribute('data-theme', savedTheme);
     updateThemeIcon(savedTheme);
@@ -50,23 +47,23 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     function updateThemeIcon(theme) {
-        // If dark, show Sun to switch to light. If light, show Moon to switch to dark.
+        // Show the icon of the theme the button switches to.
         themeBtn.textContent = theme === 'dark' ? '☀' : '☾'; 
     }
 });
 
 let currentConfig = {};
 let lastStatus = null;
-let currentLoadingModel = null; // Track which model is being loaded
-let ctxInputPristine = true; // Context field still mirrors the server, untouched
-let framesInputPristine = true; // Same for the tts frame cap
+let currentLoadingModel = null;
+let ctxInputPristine = true; // Field still mirrors the server, untouched
+let framesInputPristine = true;
 
 async function fetchConfig() {
     try {
         const res = await fetch('/api/config');
         const data = await res.json();
         currentConfig = data;
-        // Use the server's default context window as the source of truth.
+        // The server's default context window is the source of truth.
         if (data.default_ctx) {
             document.getElementById('ctx-input').value = data.default_ctx;
         }
@@ -91,8 +88,7 @@ function renderModelList(models) {
         return;
     }
 
-    // Group by config section. Older servers send no "sections", so fall back
-    // to one unlabelled group holding everything.
+    // Older servers send no "sections", so fall back to one unlabelled group.
     const sections = currentConfig.sections;
     if (!sections) {
         renderModelGroup(list, models, Object.keys(models).sort(), null);
@@ -122,8 +118,7 @@ function renderModelGroup(list, models, modelKeys, sectionName) {
         
         let quantSelector = '';
         if (!modelInfo.cmd) {
-            // New format: multiple quantizations.
-            // Keep config order; the first listed quant is the default.
+            // Config order matters: the first listed quant is the default.
             const quants = Object.keys(modelInfo);
             if (quants.length > 1) {
                 quantSelector = `
@@ -150,15 +145,10 @@ function renderModelGroup(list, models, modelKeys, sectionName) {
 }
 
 function handleModelClick(key) {
-    // Check state to decide action
-    // We allow unload only if we are fully ready. If starting, maybe allow stop too?
-    // Let's stick to "Unload" button availability.
-    
     const quantSelect = document.getElementById(`quant-select-${key}`);
     const quantization = quantSelect ? quantSelect.value : null;
 
     if (lastStatus && lastStatus.running && lastStatus.model === key && lastStatus.ready) {
-        // If same model AND same quantization (if applicable), then unload
         if (!quantization || lastStatus.quantization === quantization) {
             unloadModel();
             return;
@@ -169,7 +159,6 @@ function handleModelClick(key) {
 }
 
 function handleQuantChange(key) {
-    // If this model is currently running, reload it with the new quantization
     if (lastStatus && lastStatus.running && lastStatus.model === key) {
         const quantSelect = document.getElementById(`quant-select-${key}`);
         const quantization = quantSelect ? quantSelect.value : null;
@@ -180,13 +169,12 @@ function handleQuantChange(key) {
 async function loadModel(key, quantization = null) {
     const ctxInput = document.getElementById('ctx-input');
     const ctx = parseInt(ctxInput.value) || 4096;
-    // Frames is tts-only and separate from ctx: they count different things
-    // and an llm-sized ctx would be a nonsensical frame cap.
+    // Frames is tts-only: an llm-sized ctx makes no sense as a frame cap.
     const framesInput = document.getElementById('frames-input');
     const frames = parseInt(framesInput.value) || 2048;
     
     currentLoadingModel = key;
-    updateButtonsState(lastStatus); // Reflect loading state immediately
+    updateButtonsState(lastStatus);
 
     try {
         const res = await fetch('/api/start', {
@@ -218,7 +206,6 @@ async function applyContextChange() {
         return; // Nothing to do if stopped
     }
     
-    // Silent Reload current model with new context
     const currentModel = lastStatus.model;
     const currentQuant = lastStatus.quantization;
     loadModel(currentModel, currentQuant);
@@ -244,12 +231,10 @@ async function pollStatus() {
         updateStatusDisplay(status);
         updateActiveModel(status);
 
-        // Clear loading state only when READY
         if (currentLoadingModel && status.running && status.model === currentLoadingModel && status.ready) {
             currentLoadingModel = null;
         }
 
-        // Also safety: if we were loading but server stopped or switched model
         if (currentLoadingModel && (!status.running || (status.model && status.model !== currentLoadingModel))) {
             currentLoadingModel = null;
         }
@@ -262,12 +247,10 @@ async function pollStatus() {
 }
 
 function startPolling() {
-    // Status Poll. Run once right away so the context field shows the value the
-    // server actually remembers instead of the default for the first interval.
+    // Run once right away so the context field shows the remembered value.
     pollStatus();
     setInterval(pollStatus, 5000);
 
-    // Logs Poll
     setInterval(async () => {
         const container = document.getElementById('logs-container');
         try {
@@ -294,9 +277,7 @@ function startPolling() {
 function updateStatusDisplay(status) {
     lastStatus = status;
 
-    // The server remembers the context window last chosen for an llm; mirror it
-    // so a page reload (or a switch to an image model and back) keeps the value
-    // instead of falling back to the startup default.
+    // Mirror the server's remembered ctx so a reload keeps the chosen value.
     if (ctxInputPristine && status.selected_ctx) {
         const ctxInput = document.getElementById('ctx-input');
         if (ctxInput && document.activeElement !== ctxInput) {
@@ -314,7 +295,6 @@ function updateStatusDisplay(status) {
     const indicator = document.getElementById('global-status');
     const statusText = document.getElementById('status-text');
     const modelText = document.getElementById('current-model');
-    // const ctxText = document.getElementById('current-ctx'); // Removed from DOM
     const webuiBtn = document.getElementById('webui-btn');
     
     applyDashboardKind(status.kind);
@@ -324,9 +304,7 @@ function updateStatusDisplay(status) {
         statusText.innerText = `Running (Port: ${status.port || '?'})`;
         statusText.style.color = 'var(--success)';
         modelText.innerText = status.model || 'Unknown';
-        // ctxText.innerText = status.ctx || '-';
 
-        // Update Stats
         if (status.stats && status.kind === 'sd') {
             const s = status.stats;
 
@@ -348,8 +326,7 @@ function updateStatusDisplay(status) {
         } else if (status.stats && status.kind === 'tts') {
             const s = status.stats;
 
-            // RTF below 1 means faster than real time; show the multiple, it
-            // reads better than 0.22.
+            // RTF below 1 is faster than realtime; the multiple reads better.
             const rtfEl = document.getElementById('stat-tts-rtf');
             if (rtfEl) rtfEl.innerText = s.tts_rtf ? `${(1 / s.tts_rtf).toFixed(1)}x realtime` : '-';
 
@@ -367,7 +344,7 @@ function updateStatusDisplay(status) {
             if (clEl) clEl.innerText = s.tts_clips || 0;
         } else if (status.stats) {
             const used = status.stats.ctx_used || 0;
-            const limit = status.ctx || 0; // Use status.ctx as the limit source
+            const limit = status.ctx || 0;
 
             const ctxUsageEl = document.getElementById('stat-ctx-usage');
             if (ctxUsageEl) ctxUsageEl.innerText = `${used} / ${limit}`;
@@ -382,7 +359,6 @@ function updateStatusDisplay(status) {
             if(totalTokensEl) totalTokensEl.innerText = status.stats.total_tokens || 0;
         }
 
-        // WebUI Button
         if (status.ready) {
             webuiBtn.style.display = 'inline-block';
             // Republished pages inherit this origin's TLS; sd-server's is not one
@@ -402,10 +378,8 @@ function updateStatusDisplay(status) {
         statusText.innerText = 'Stopped';
         statusText.style.color = 'var(--text-secondary)';
         if (!status.model) modelText.innerText = '-';
-        // if (!status.ctx) ctxText.innerText = '-';
         webuiBtn.style.display = 'none';
         
-        // Reset stats display
         const ctxUsageEl = document.getElementById('stat-ctx-usage');
         if (ctxUsageEl) ctxUsageEl.innerText = '-';
         
@@ -426,9 +400,8 @@ function updateStatusDisplay(status) {
     }
 }
 
-// Each backend reports something different: llama.cpp tokens per second,
-// sd-server seconds per step, tts-server a real-time factor. One stat block
-// each, and neither sd nor tts has a context window to set.
+// One stat block per backend: tokens per second, seconds per step, or a
+// real-time factor. Neither sd nor tts has a context window to set.
 function applyDashboardKind(kind) {
     const isSd = kind === 'sd';
     const isTts = kind === 'tts';
@@ -451,7 +424,6 @@ function updateActiveModel(status) {
         if (status.running && status.model === el.dataset.key) {
             el.classList.add('active');
             
-            // Also update the select to match current quantization if it's not already
             const quantSelect = el.querySelector('.quant-select');
             if (quantSelect && status.quantization && quantSelect.value !== status.quantization) {
                 quantSelect.value = status.quantization;
@@ -461,7 +433,6 @@ function updateActiveModel(status) {
 }
 
 function updateButtonsState(status) {
-    // defaults
     const isRunning = status ? status.running : false;
     const runningModel = status ? status.model : null;
     const isReady = status ? status.ready : false;
@@ -470,13 +441,10 @@ function updateButtonsState(status) {
         const key = el.dataset.key;
         const btn = el.querySelector('.model-btn');
         
-        // Reset styles first
         btn.classList.remove('btn-primary', 'btn-danger', 'btn-warning', 'btn-success');
         btn.disabled = false;
 
-        // If backend says it's running and ready, show Unload (Source of Truth)
         if (isRunning && key === runningModel && isReady) {
-            // Check if quantization matches
             const quantSelect = el.querySelector('.quant-select');
             const selectedQuant = quantSelect ? quantSelect.value : null;
             
@@ -488,23 +456,19 @@ function updateButtonsState(status) {
                 btn.classList.add('btn-primary');
             }
             
-            // Safety: Clear loading tracker if it was stuck
             if (key === currentLoadingModel) {
                 currentLoadingModel = null;
             }
             
         } else if (key === currentLoadingModel) {
-            // Loading state (User initiated)
             btn.innerText = "Starting...";
             btn.classList.add('btn-warning'); 
             btn.disabled = true;
         } else if (isRunning && key === runningModel) {
-            // Running but not ready (Starting...)
             btn.innerText = "Starting...";
             btn.classList.add('btn-warning');
             btn.disabled = true;
         } else {
-            // Idle state
             btn.innerText = "Load";
             btn.classList.add('btn-primary');
         }
@@ -530,16 +494,14 @@ function clearLogs() {
         .catch(e => console.error('Failed to clear logs:', e));
 }
 
-// Add touch event support for mobile
+// Touch support for mobile, plus ghost-click suppression.
 function setupMobileButton(button, handler) {
-    // Handle both touch and mouse events
     button.addEventListener('touchend', function(e) {
         e.preventDefault();
         e.stopPropagation();
         handler();
     }, { passive: false });
     
-    // Prevent ghost clicks
     button.addEventListener('touchstart', function(e) {
         e.stopPropagation();
     }, { passive: true });

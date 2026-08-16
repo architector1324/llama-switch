@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -25,12 +26,8 @@ from starlette.background import BackgroundTask
 # --- Lifespan ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup logic
     yield
-    # Shutdown logic
     print("\n[Service] Shutting down... cleaning up processes")
-    # We reference global 'state' and '_stop_process_unsafe' which are defined below.
-    # This works because lifespan is called at runtime after module load.
     if "state" in globals() and state.process:  # type: ignore
         with state.lock:
             _stop_process_unsafe()
@@ -65,8 +62,6 @@ class ConfigManager:
         self.last_mtime = 0
         self.lock = threading.Lock()
         self.on_change = on_change
-
-        # Initial load
         self.reload()
 
         if self.watch:
@@ -90,9 +85,7 @@ class ConfigManager:
 
                 sections = {name: (data.get(name) or {}) for name in SECTIONS}
 
-                # Pre-sections configs put every model under a single "models"
-                # key. Keep reading those so an old config still works after an
-                # upgrade; an explicit "llm" section always wins.
+                # Configs written before sections put everything under "models".
                 legacy = data.get("models")
                 if legacy and not sections["llm"]:
                     sections["llm"] = legacy
@@ -146,14 +139,9 @@ class ConfigManager:
             return self.sections.get(kind, {})
 
     def get_kind(self, model_key: str) -> Optional[str]:
-        """Which section a model came from: "llm", "sd", or None if unknown."""
+        """Which section a model came from, or None if it is unknown."""
         with self.lock:
             return self.model_kind.get(model_key)
-
-
-import re
-
-# ... (existing imports)
 
 
 # --- Global State ---
@@ -167,12 +155,9 @@ class ServiceState:
         self.current_port: int = 0
         self.current_kind: Optional[str] = None
         self.default_ctx: int = 4096
-        # Context window last chosen for an llm. Survives sd loads and stops,
-        # so switching to an image model and back does not silently drop the
-        # user's choice down to default_ctx.
+        # Survives sd loads and stops, so a round trip keeps the user's choice.
         self.selected_ctx: int = 0
-        # Frame cap for tts, kept apart from the context window: 2048 frames
-        # at 12.5 per second is the ~164 s the talker defaults to.
+        # Frame cap for tts, apart from ctx: 2048 frames at 12.5/s is about 164 s.
         self.default_frames: int = 2048
         self.selected_frames: int = 0
         self.host: str = "0.0.0.0"
@@ -186,16 +171,13 @@ class ServiceState:
             "total_tokens": 0,  # Accumulated generation
             "prompt_speed": 0.0,
             "gen_speed": 0.0,
-            # sd-server: step/steps drive the bar, sd_speed is always seconds
-            # per step regardless of which unit sd.cpp chose to print.
+            # sd_speed is seconds per step whichever unit sd.cpp printed.
             "sd_step": 0,
             "sd_steps": 0,
             "sd_speed": 0.0,
             "sd_last_time": 0.0,
             "sd_images": 0,
             "sd_size": "",
-            # tts-server: frames arrive in batches of 8 while generating, the
-            # totals land in one [Perf] line when the clip is done.
             "tts_frames": 0,
             "tts_rtf": 0.0,
             "tts_audio": 0.0,
@@ -226,15 +208,12 @@ def _stop_process_unsafe():
         state.current_port = 0
         state.current_kind = None
         state.ready = False
-        # Reset stats
         state.stats = {
             "ctx_used": 0,
             "ctx_limit": 0,
             "total_tokens": 0,
             "prompt_speed": 0.0,
             "gen_speed": 0.0,
-            # sd-server: step/steps drive the bar, sd_speed is always seconds
-            # per step regardless of which unit sd.cpp chose to print.
             "sd_step": 0,
             "sd_steps": 0,
             "sd_speed": 0.0,
@@ -246,7 +225,7 @@ def _stop_process_unsafe():
 
 
 def on_config_change():
-    """Callback to stop the server when config changes."""
+    """Stop the running model when the config changes."""
     print("[Service] Config change detected. Stopping any running model...")
     with state.lock:
         _stop_process_unsafe()
@@ -257,13 +236,8 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
 def _iter_output_chunks(proc):
-    """Yield output split on CR as well as LF.
-
-    llama-server ends every line with LF, but sd-server redraws its sampling
-    progress in place with CR and no LF until the final step. readline() would
-    therefore hold the whole run back and deliver it as one blob at the end,
-    so the dashboard would never see progress while it is happening.
-    """
+    """Split on CR too: sd-server redraws progress in place and readline() would
+    hold a whole run back until the last step."""
     buf = ""
     while True:
         chunk = proc.stdout.read(1)
@@ -282,16 +256,14 @@ def _iter_output_chunks(proc):
 
 
 def log_reader(proc, log_queue):
-    # Regex patterns
     # prompt eval time =       4.67 ms /    11 tokens (    0.42 ms per token,  2355.46 tokens per second)
     re_prompt = re.compile(
         r"prompt eval time\s*=\s*[\d\.]+\s*ms\s*/\s*\d+\s*tokens\s*\(\s*[\d\.]+\s*ms per token,\s*([\d\.]+)\s*tokens per second\)"
     )
 
     # eval time =     492.12 ms /     9 tokens (   54.68 ms per token,    18.29 tokens per second)
-    # The lookbehind is what separates this from "prompt eval time"; anchoring
-    # to line start does not work, the line carries a
-    # "<ts> I slot print_timing: id 0 | task 0 |" prefix.
+    # The lookbehind separates this from "prompt eval time"; the line is prefixed
+    # with "<ts> I slot print_timing: id 0 | task 0 |" so ^ does not work.
     re_eval = re.compile(
         r"(?<!prompt )eval time\s*=\s*[\d\.]+\s*ms\s*/\s*(\d+)\s*tokens\s*\(\s*[\d\.]+\s*ms per token,\s*([\d\.]+)\s*tokens per second\)"
     )
@@ -321,13 +293,8 @@ def log_reader(proc, log_queue):
             if decoded:
                 log_queue.append(decoded)
 
-                # Check for ready state (Robust check)
-
-                # Match stable substrings that survive llama.cpp log format
-                # changes. Old format: "main: model loaded" /
-                # "main: server is listening on http://...". New format
-                # (srv llama_server): "llama_server: model loaded" /
-                # "llama_server: listening on http://...".
+                # Substrings that survive llama.cpp log format changes:
+                # "main:" became "llama_server:" and the wording shifted.
                 if (
                     "model loaded" in decoded
                     or '"msg":"model loaded"' in decoded
@@ -338,17 +305,13 @@ def log_reader(proc, log_queue):
                         if not state.ready:
                             state.ready = True
 
-                # Parsing Stats
-
                 try:
-                    # Prompt Speed
                     pm = re_prompt.search(decoded)
                     if pm:
                         val = float(pm.group(1))
                         with state.lock:
                             state.stats["prompt_speed"] = val
 
-                    # Gen Speed & Token Accumulation
                     em = re_eval.search(decoded)
                     if em:
                         tokens_count = int(em.group(1))
@@ -357,7 +320,6 @@ def log_reader(proc, log_queue):
                             state.stats["gen_speed"] = speed_val
                             state.stats["total_tokens"] += tokens_count
 
-                    # Context Usage (Total session tokens for that slot)
                     rm = re_release.search(decoded)
                     if rm:
                         used = int(rm.group(1))
@@ -372,8 +334,7 @@ def log_reader(proc, log_queue):
                     if sm:
                         step, steps = int(sm.group(1)), int(sm.group(2))
                         value, unit = float(sm.group(3)), sm.group(4)
-                        # sd.cpp flips the unit below 1s per step; normalise to
-                        # s/it so the dashboard never has to switch labels.
+                        # sd.cpp flips the unit below 1s per step; normalise to s/it.
                         sec_per_step = value if unit == "s/it" else (
                             1.0 / value if value > 0 else 0.0
                         )
@@ -387,7 +348,7 @@ def log_reader(proc, log_queue):
                         with state.lock:
                             state.stats["sd_last_time"] = float(dm.group(1))
                             state.stats["sd_images"] += 1
-                            # Park the bar at 100% instead of the last partial step.
+                            # Park the bar at 100% rather than the last partial step.
                             if state.stats["sd_steps"]:
                                 state.stats["sd_step"] = state.stats["sd_steps"]
 
@@ -429,19 +390,16 @@ class StartRequest(BaseModel):
 
 # --- Internal Start Logic ---
 def _default_quant(model_conf: Dict) -> Optional[str]:
-    """Default quantization for a model: None for the old (single-cmd) format,
-    otherwise the first quant listed in the config (insertion order is preserved
-    by yaml.safe_load on Python 3.7+)."""
+    """First quant listed in the config, or None for the old single-cmd format."""
     if "cmd" in model_conf:
         return None
     return next(iter(model_conf), None)
 
 
 def _resolve_model(requested_model: str, kind: str) -> Tuple[str, Optional[str]]:
-    """Resolve an OpenAI-style model id to (model_key, quantization) within one kind.
+    """Resolve an OpenAI model id to (model_key, quantization) inside one kind.
 
-    A bare id selects the model's default quant; a `<model>-<quant>` suffix selects
-    an explicit one, mirroring how the ids are published in /v1/models."""
+    A bare id takes the default quant, a `<model>-<quant>` suffix an explicit one."""
     if not state.config_mgr:
         raise HTTPException(status_code=500, detail="Config not initialized")
 
@@ -499,15 +457,12 @@ def _start_model_server(
     model_conf = models[model_key]
     kind = state.config_mgr.get_kind(model_key) or "llm"
 
-    # Handle new config format (multiple quantizations)
     if "cmd" in model_conf:
-        # Old format
+        # Old single-cmd format, no quants
         cmd_template = model_conf.get("cmd", "")
         actual_quant = None
     else:
-        # New format
         if not quantization:
-            # Default to the first quantization listed in the config
             quantization = _default_quant(model_conf)
 
         if quantization not in model_conf:
@@ -518,25 +473,22 @@ def _start_model_server(
         cmd_template = model_conf[quantization]
         actual_quant = quantization
 
-    # Determined context: an explicit request wins, otherwise reuse the last
-    # context chosen for an llm, and only then fall back to the startup default.
+    # An explicit request wins, then the last llm choice, then the startup default.
     if ctx is None:
         ctx = state.selected_ctx or state.default_ctx
 
-    # ${FRAMES} is tts-only and deliberately NOT ${CTX}: they count different
-    # things (audio frames at 12.5/s against context tokens) and the llm value
-    # is orders of magnitude too large to mean anything as a frame cap.
+    # Deliberately not ${CTX}: frames at 12.5/s and context tokens are unrelated,
+    # and the llm value is far too large to work as a frame cap.
     if frames is None:
         frames = state.selected_frames or state.default_frames
 
-    # Find a free port
     port = find_free_port()
 
     cmd_str = cmd_template.replace("${PORT}", str(port))
     cmd_str = cmd_str.replace("${CTX}", str(ctx))
     cmd_str = cmd_str.replace("${FRAMES}", str(frames))
     cmd_str = cmd_str.replace("${HOST}", state.host)
-    # Fallback
+    # Bare forms, for configs written without the braces.
     cmd_str = cmd_str.replace("$PORT", str(port))
     cmd_str = cmd_str.replace("$CTX", str(ctx))
     cmd_str = cmd_str.replace("$FRAMES", str(frames))
@@ -560,8 +512,7 @@ def _start_model_server(
             )
             state.current_model = model_key
             state.current_quant = actual_quant
-            # sd-server has no context window; reporting one would drive the
-            # context gauge in the UI off a number that means nothing there.
+            # sd-server has no context window; reporting one skews the UI gauge.
             state.current_ctx = ctx if kind == "llm" else 0
             if kind == "llm":
                 state.selected_ctx = ctx
@@ -616,37 +567,30 @@ def get_v1_models():
     if not state.config_mgr:
         return {"object": "list", "data": [], "models": []}
 
-    # Only text models: /v1/models feeds chat clients, and listing image
-    # backends there makes them offer sd-server as a chat model.
+    # Text models only, or chat clients would offer sd-server as a chat model.
     models_data = state.config_mgr.get_models("llm")
     model_list_openai = []
     model_list_custom = []
 
     for model_key, model_info in models_data.items():
-        # Determine available quantizations
         if "cmd" in model_info:
-            # Old format
             quants = {None: model_info["cmd"]}
         else:
-            # New format
             quants = model_info
 
-        # The default (first-listed) quant is exposed under the bare model id
+        # The first-listed quant is the one published under the bare model id.
         default_quant = next(iter(quants), None)
 
         for quant_key, cmd_str in quants.items():
-            # Determine OpenAI ID
             if quant_key == default_quant:
                 openai_id = model_key
             else:
                 openai_id = f"{model_key}-{quant_key}"
 
-            # Check capabilities
             capabilities = ["completion", "chat"]
             if "mmproj" in cmd_str:
                 capabilities.append("multimodal")
 
-            # OpenAI Data Format
             model_list_openai.append(
                 {
                     "id": openai_id,
@@ -664,7 +608,6 @@ def get_v1_models():
                 }
             )
 
-            # Custom "models" Format
             model_list_custom.append(
                 {
                     "name": openai_id,
@@ -746,9 +689,7 @@ def start_server(req: StartRequest):
 @app.post("/v1/completions")
 @app.post("/v1/responses")
 async def proxy_to_llama(request: Request):
-    """
-    Transparent proxy that auto-loads the requested model.
-    """
+    """Transparent proxy that auto-loads the requested model."""
     try:
         body = await request.json()
     except Exception:
@@ -761,9 +702,8 @@ async def proxy_to_llama(request: Request):
     # Text endpoints resolve against text models only, matching /v1/models.
     _autoload_model(*_resolve_model(requested_model, "llm"))
 
-    # Wait for ready
     retries = 0
-    while retries < 60:  # 60 seconds timeout
+    while retries < 60:  # seconds
         if state.ready:
             break
         await asyncio.sleep(1)
@@ -774,10 +714,8 @@ async def proxy_to_llama(request: Request):
             status_code=504, detail="Model failed to load within timeout"
         )
 
-    # Forward the request
     target_url = f"http://{state.host}:{state.current_port}{request.url.path}"
 
-    # filter headers
     filtered_headers = {
         k: v
         for k, v in request.headers.items()
@@ -817,24 +755,19 @@ async def proxy_to_llama(request: Request):
 
 # --- Image proxy ---
 # sd-server speaks three dialects at once, so forward all of them verbatim:
-#   /v1/images/*   OpenAI
-#   /sdapi/v1/*    AUTOMATIC1111 (what open-webui talks by default)
-#   /sdcpp/v1/*    native, also what sd-server's own WebUI uses
-# OpenAI image payloads carry a `model` field, so those switch models the same
-# way the text proxy does. The A1111 and native dialects have no model name and
-# still rely on the caller picking the model beforehand (UI, /api/start).
+#   /v1/images/*   OpenAI, the only one carrying a model name
+#   /sdapi/v1/*    AUTOMATIC1111, what open-webui talks by default
+#   /sdcpp/v1/*    native, what sd-server's own WebUI uses
 IMAGE_PREFIXES = ("/v1/images/", "/sdapi/v1/", "/sdcpp/v1/")
 
 _BOUNDARY_RE = re.compile(r'boundary=(?:"([^"]+)"|([^\s;]+))', re.IGNORECASE)
 
 
 def _model_from_multipart(raw_body: bytes, content_type: str) -> Optional[str]:
-    """Model id from a `model` form field of a multipart upload.
+    """Model id from the `model` form field of a multipart upload.
 
-    Endpoints that take a file — audio transcriptions, image edits — send the
-    model id as one short text part sitting next to a file part that can be tens
-    of megabytes. Walk the part headers by offset rather than splitting the body,
-    so the upload itself is never copied."""
+    Walks part headers by offset so the file part, which can be tens of
+    megabytes, is never copied."""
     match = _BOUNDARY_RE.search(content_type)
     if not match:
         return None
@@ -978,17 +911,9 @@ async def proxy_sdcpp(request: Request, path: str):
 
 
 # --- Audio proxy ---
-# /v1/audio is shared ground: qwentts.cpp's tts-server owns speech and the
-# voice registry, while transcriptions and translations are llama-server's own
-# ASR endpoints and belong to an llm profile. Routing the whole prefix to tts
-# would 409 every transcription with "load a tts model first".
-#
-# OpenAI speech payloads carry a `model` field, so they switch models the same
-# way the text and image proxies do; tts-server itself only reads
-# input/voice/instructions/response_format/speed and ignores the rest.
-# Transcriptions name their model in a multipart field instead, which
-# _model_from_body reads, so they switch models too. llama-server ignores the
-# extra field — it only wants `file`.
+# /v1/audio is split ground: tts-server owns speech and the voice registry,
+# while transcriptions and translations are llama-server's own ASR endpoints.
+# Sending the whole prefix to tts would 409 every transcription.
 AUDIO_LLM_ENDPOINTS = ("transcriptions", "translations")
 
 # Qwen3-ASR prefixes its answer with "language <Name><asr_text>" and llama-server
@@ -1183,11 +1108,10 @@ async def proxy_audio(request: Request, path: str):
     )
 
 
-# Engine WebUIs, republished under this fixed origin. They live on a port
-# find_free_port() picks anew on every load, so linking straight at one means a
-# different origin each time: no cert matches it, no browser exception survives,
-# and getUserMedia refuses to hand over the microphone. Both pages build their
-# requests relative to the document, so a subpath needs no changes upstream.
+# Engine WebUIs republished on this origin, so they inherit its TLS and its
+# certificate. Linked directly they would sit on a port find_free_port() picks
+# anew every load, which no certificate matches and getUserMedia rejects.
+# Both pages fetch relative to the document, so a subpath needs no upstream change.
 @app.get("/tts")
 async def tts_ui_slash():
     return RedirectResponse("/tts/")
@@ -1242,9 +1166,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "-w", "--watch", action="store_true", help="Watch config file for changes"
     )
-    # Browsers gate getUserMedia and friends behind a secure context, and
-    # localhost is the only plain-http origin that counts as one. Serving the
-    # UI over TLS is what makes the microphone reachable from another device.
+    # localhost is the only plain-http origin browsers call a secure context,
+    # so TLS is what makes the microphone work from another device.
     parser.add_argument(
         "--tls-cert", type=str, default=None, help="TLS certificate (PEM), enables https"
     )
@@ -1257,11 +1180,9 @@ if __name__ == "__main__":
     if bool(args.tls_cert) != bool(args.tls_key):
         parser.error("--tls-cert and --tls-key go together")
 
-    # Store default ctx
     state.default_ctx = args.ctx
     state.host = args.host
 
-    # Initialize Config Manager with callback
     state.config_mgr = ConfigManager(
         args.config, watch=args.watch, on_change=on_config_change
     )

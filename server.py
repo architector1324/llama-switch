@@ -17,7 +17,7 @@ import httpx
 import uvicorn
 import yaml
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
@@ -44,7 +44,7 @@ def find_free_port():
 
 
 # --- Config Manager ---
-SECTIONS = ("llm", "sd", "tts")
+SECTIONS = ("llm", "sd", "tts", "music")
 
 
 class ConfigManager:
@@ -1088,25 +1088,14 @@ async def proxy_audio(request: Request, path: str):
     )
 
 
-# Republished here so engine UIs inherit this TLS; their own port moves every load.
-@app.get("/tts")
-async def tts_ui_slash():
-    return RedirectResponse("/tts/")
+# audio.cpp runs generation through its own task endpoint, not the OpenAI audio one.
+@app.api_route("/v1/tasks/{path:path}", methods=["GET", "POST"])
+async def proxy_tasks(request: Request, path: str):
+    return await _proxy_to_current(request, f"v1/tasks/{path}", kind="music")
 
 
-@app.api_route("/tts/{path:path}", methods=["GET", "POST", "DELETE"])
-async def proxy_tts_ui(request: Request, path: str):
-    return await _proxy_to_current(request, path, kind="tts")
-
-
-@app.get("/llm")
-async def llm_ui_slash():
-    return RedirectResponse("/llm/")
-
-
-@app.api_route("/llm/{path:path}", methods=["GET", "POST", "DELETE"])
-async def proxy_llm_ui(request: Request, path: str):
-    return await _proxy_to_current(request, path, kind="llm", rewrite=_clean_chat)
+# Engine UIs are not republished here. They call their own paths absolutely, and
+# those collide with this server's; "Open WebUI" points straight at the engine port.
 
 
 # --- Static files ---

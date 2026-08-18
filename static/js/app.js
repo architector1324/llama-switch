@@ -77,7 +77,7 @@ async function fetchConfig() {
     }
 }
 
-const SECTION_LABELS = { llm: 'Language', sd: 'Image', tts: 'Speech' };
+const SECTION_LABELS = { llm: 'Language', sd: 'Image', tts: 'Speech', music: 'Music' };
 
 function renderModelList(models) {
     const list = document.getElementById('model-list');
@@ -342,7 +342,7 @@ function updateStatusDisplay(status) {
 
             const clEl = document.getElementById('stat-tts-clips');
             if (clEl) clEl.innerText = s.tts_clips || 0;
-        } else if (status.stats) {
+        } else if (status.stats && status.kind !== 'music') {
             const used = status.stats.ctx_used || 0;
             const limit = status.ctx || 0;
 
@@ -361,13 +361,10 @@ function updateStatusDisplay(status) {
 
         if (status.ready) {
             webuiBtn.style.display = 'inline-block';
-            // Republished pages inherit this TLS; sd-server is still on its own port.
-            if (status.kind === 'tts' || status.kind === 'llm') {
-                webuiBtn.href = `/${status.kind}/`;
-            } else {
-                const displayHost = (status.host === '0.0.0.0') ? window.location.hostname : status.host;
-                webuiBtn.href = `http://${displayHost}:${status.port}`;
-            }
+            // Straight to the engine's own address: every engine page calls its own
+            // paths absolutely, so none of them survive being served under a prefix.
+            const displayHost = (status.host === '0.0.0.0') ? window.location.hostname : status.host;
+            webuiBtn.href = `http://${displayHost}:${status.port}`;
         } else {
             webuiBtn.style.display = 'none';
         }
@@ -403,16 +400,20 @@ function updateStatusDisplay(status) {
 function applyDashboardKind(kind) {
     const isSd = kind === 'sd';
     const isTts = kind === 'tts';
+    // Music has no counters of its own yet, but it is not a language model either:
+    // showing the llm block would report someone else's tokens.
+    const isMusic = kind === 'music';
+    const notLlm = isSd || isTts || isMusic;
     const llmStats = document.getElementById('stats-llm');
     const sdStats = document.getElementById('stats-sd');
     const ttsStats = document.getElementById('stats-tts');
     const ctxControl = document.getElementById('ctx-control');
     const framesControl = document.getElementById('frames-control');
 
-    if (llmStats) llmStats.style.display = (isSd || isTts) ? 'none' : '';
+    if (llmStats) llmStats.style.display = notLlm ? 'none' : '';
     if (sdStats) sdStats.style.display = isSd ? '' : 'none';
     if (ttsStats) ttsStats.style.display = isTts ? '' : 'none';
-    if (ctxControl) ctxControl.style.display = (isSd || isTts) ? 'none' : '';
+    if (ctxControl) ctxControl.style.display = notLlm ? 'none' : '';
     if (framesControl) framesControl.style.display = isTts ? '' : 'none';
 }
 

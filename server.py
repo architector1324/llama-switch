@@ -1132,18 +1132,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "-w", "--watch", action="store_true", help="Watch config file for changes"
     )
-    # localhost is the only plain-http secure context, so TLS frees the microphone.
-    parser.add_argument(
-        "--tls-cert", type=str, default=None, help="TLS certificate (PEM), enables https"
-    )
-    parser.add_argument(
-        "--tls-key", type=str, default=None, help="TLS private key (PEM)"
-    )
 
     args = parser.parse_args()
-
-    if bool(args.tls_cert) != bool(args.tls_key):
-        parser.error("--tls-cert and --tls-key go together")
 
     state.default_ctx = args.ctx
     state.host = args.host
@@ -1152,12 +1142,5 @@ if __name__ == "__main__":
         args.config, watch=args.watch, on_change=on_config_change
     )
 
-    scheme = "https" if args.tls_cert else "http"
-    print(f"Starting UI on {scheme}://{args.host}:{args.port}")
-    uvicorn.run(
-        app,
-        host=args.host,
-        port=args.port,
-        ssl_certfile=args.tls_cert,
-        ssl_keyfile=args.tls_key,
-    )
+    print(f"Starting UI on http://{args.host}:{args.port}")
+    uvicorn.run(app, host=args.host, port=args.port)

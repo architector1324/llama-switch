@@ -19,7 +19,6 @@ Llama Switch puts one dashboard and one OpenAI-compatible endpoint in front of s
 - **Upstream Logs**: view raw engine logs directly in the UI.
 - **Theme Support**: built-in Dark and Light modes.
 - **WebUI Link**: opens the running engine's own interface on the engine's own address. Engine pages request their paths absolutely, so none of them survive being served under a prefix here.
-- **HTTPS**: serve the whole thing over TLS, which is what makes the microphone reachable from another device.
 - **Config hot-reload**: with `--watch`, edits to the config are picked up without a restart.
 
 ## Prerequisites
@@ -126,12 +125,9 @@ Every request is served by whichever model is currently loaded. Requests that na
 | `-c`, `--ctx` | `4096` | default context window |
 | `-f`, `--config` | `config.yaml` | config file path |
 | `-w`, `--watch` | off | reload the config when it changes on disk |
-| `--tls-cert`, `--tls-key` | off | PEM certificate and key; giving both switches the UI to `https` |
 
-### HTTPS and the microphone
+### The microphone
 
-Browsers only hand over the microphone in a secure context. `localhost` counts as one over plain http, but any other address does not, including a phone or laptop reaching the machine by hostname or IP, and the recording controls simply disappear there. Pass `--tls-cert` and `--tls-key` to serve over `https`, and make sure the certificate is signed by a CA the other device trusts: a self-signed certificate is rejected outright, and a click-through warning is not enough to restore a secure context.
-
-This covers the dashboard and the API. Engine pages opened through **Open WebUI** run on the engine's own port over plain `http`, so their recording controls are unavailable from another device.
+Everything is served over plain `http`. Browsers only hand over the microphone in a secure context, and `localhost` is the only plain-http address that counts as one, so recording controls are unavailable from a phone or a laptop reaching this machine by hostname or IP.
 
 > Note that `--watch` reloads the config by **stopping whatever is running**. Do not edit the config while a model is mid-generation.

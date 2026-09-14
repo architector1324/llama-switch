@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Llama Switch</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=5">
+    <link rel="stylesheet" href="/static/css/style.css?v=6">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body class="dark-theme">
@@ -119,6 +119,17 @@
                                 </div>
                             </div>
 
+                            <div class="control-group compact-group" id="preserve-think-control">
+                                <label for="preserve-think-input" title="Pull the reasoning of earlier assistant turns back into the prompt. Off means every turn starts from a clean slate. Applied when the model loads, so toggling reloads it.">Preserve Thinking</label>
+                                <div class="input-wrapper">
+                                    <label class="switch">
+                                        <input type="checkbox" id="preserve-think-input" onchange="applyPreserveThinkChange()">
+                                        <span class="switch-track"><span class="switch-thumb"></span></span>
+                                    </label>
+                                    <span class="switch-state" id="preserve-think-state">Off</span>
+                                </div>
+                            </div>
+
                             <div class="control-group compact-group" id="frames-control" style="display: none;">
                                 <label for="frames-input" title="Audio frames, 12.5 per second. 2048 caps a clip at about 164 s; longer text is cut off mid-sentence.">Max Frames</label>
                                 <div class="input-wrapper">
@@ -155,6 +166,6 @@
             </section>
         </main>
     </div>
-    <script src="/static/js/app.js?v=7"></script>
+    <script src="/static/js/app.js?v=10"></script>
 </body>
 </html>

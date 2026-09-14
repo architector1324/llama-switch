@@ -166,6 +166,9 @@ class ServiceState:
         self.default_ctx: int = 4096
         # Survives sd loads and stops, so a round trip keeps the user's choice.
         self.selected_ctx: int = 0
+        # Whether the next llm load pulls previous reasoning back into the prompt.
+        # Sticky like selected_ctx: a stop or an sd load must not reset the choice.
+        self.selected_preserve_think: bool = False
         # Frame cap for tts, apart from ctx: 2048 frames at 12.5/s is about 164 s.
         self.default_frames: int = 2048
         self.selected_frames: int = 0
@@ -391,6 +394,7 @@ class StartRequest(BaseModel):
     quantization: Optional[str] = None
     ctx: Optional[int] = None
     frames: Optional[int] = None
+    preserve_think: Optional[bool] = None
 
 
 # --- Internal Start Logic ---
@@ -449,6 +453,7 @@ def _start_model_server(
     quantization: Optional[str] = None,
     ctx: Optional[int] = None,
     frames: Optional[int] = None,
+    preserve_think: Optional[bool] = None,
 ) -> Dict:
     if not state.config_mgr:
         raise RuntimeError("Config not initialized")
@@ -484,17 +489,26 @@ def _start_model_server(
     if frames is None:
         frames = state.selected_frames or state.default_frames
 
+    # Same precedence as ctx: an explicit request, then the last llm choice.
+    if preserve_think is None:
+        preserve_think = state.selected_preserve_think
+    preserve_flag = (
+        "--reasoning-preserve" if preserve_think else "--no-reasoning-preserve"
+    )
+
     port = find_free_port()
 
     cmd_str = cmd_template.replace("${PORT}", str(port))
     cmd_str = cmd_str.replace("${CTX}", str(ctx))
     cmd_str = cmd_str.replace("${FRAMES}", str(frames))
     cmd_str = cmd_str.replace("${HOST}", state.host)
+    cmd_str = cmd_str.replace("${PRESERVE_THINK}", preserve_flag)
     # Bare forms, for configs written without the braces.
     cmd_str = cmd_str.replace("$PORT", str(port))
     cmd_str = cmd_str.replace("$CTX", str(ctx))
     cmd_str = cmd_str.replace("$FRAMES", str(frames))
     cmd_str = cmd_str.replace("$HOST", state.host)
+    cmd_str = cmd_str.replace("$PRESERVE_THINK", preserve_flag)
 
     print(f"Starting model {model_key} on {state.host}:{port} with command: {cmd_str}")
 
@@ -518,6 +532,7 @@ def _start_model_server(
             state.current_ctx = ctx if kind == "llm" else 0
             if kind == "llm":
                 state.selected_ctx = ctx
+                state.selected_preserve_think = preserve_think
             state.current_frames = frames if kind == "tts" else 0
             if kind == "tts":
                 state.selected_frames = frames
@@ -646,6 +661,7 @@ def get_status():
             "kind": state.current_kind,
             "ctx": state.current_ctx,
             "selected_ctx": state.selected_ctx or state.default_ctx,
+            "selected_preserve_think": state.selected_preserve_think,
             "frames": state.current_frames,
             "selected_frames": state.selected_frames or state.default_frames,
             "port": state.current_port if is_running else None,
@@ -678,7 +694,7 @@ def stop_server():
 def start_server(req: StartRequest):
     try:
         updated_data = _start_model_server(
-            req.model_key, req.quantization, req.ctx, req.frames
+            req.model_key, req.quantization, req.ctx, req.frames, req.preserve_think
         )
         return {"status": "started", **updated_data}
     except ValueError as e:

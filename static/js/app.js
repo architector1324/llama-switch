@@ -57,6 +57,7 @@ let lastStatus = null;
 let currentLoadingModel = null;
 let ctxInputPristine = true; // Field still mirrors the server, untouched
 let framesInputPristine = true;
+let preserveInputPristine = true;
 
 async function fetchConfig() {
     try {
@@ -172,6 +173,9 @@ async function loadModel(key, quantization = null) {
     // Frames is tts-only: an llm-sized ctx makes no sense as a frame cap.
     const framesInput = document.getElementById('frames-input');
     const frames = parseInt(framesInput.value) || 2048;
+    // A launch flag, not a runtime one: it only takes effect on this load.
+    const preserveInput = document.getElementById('preserve-think-input');
+    const preserveThink = preserveInput ? preserveInput.checked : false;
     
     currentLoadingModel = key;
     updateButtonsState(lastStatus);
@@ -180,7 +184,7 @@ async function loadModel(key, quantization = null) {
         const res = await fetch('/api/start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model_key: key, quantization: quantization, ctx: ctx, frames: frames })
+            body: JSON.stringify({ model_key: key, quantization: quantization, ctx: ctx, frames: frames, preserve_think: preserveThink })
         });
         
         if (!res.ok) {
@@ -209,6 +213,26 @@ async function applyContextChange() {
     const currentModel = lastStatus.model;
     const currentQuant = lastStatus.quantization;
     loadModel(currentModel, currentQuant);
+}
+
+function renderPreserveThinkState(on) {
+    const label = document.getElementById('preserve-think-state');
+    if (!label) return;
+    label.textContent = on ? 'On' : 'Off';
+    label.classList.toggle('is-on', !!on);
+}
+
+async function applyPreserveThinkChange() {
+    const input = document.getElementById('preserve-think-input');
+    // Once toggled, status polls stop overwriting the box.
+    preserveInputPristine = false;
+    renderPreserveThinkState(input && input.checked);
+
+    // The flag is baked into the command line, so the model has to come back up.
+    if (!lastStatus || !lastStatus.running || !lastStatus.model) {
+        return; // Nothing loaded: the checkbox just waits for the next start
+    }
+    loadModel(lastStatus.model, lastStatus.quantization);
 }
 
 async function applyFramesChange() {
@@ -282,6 +306,16 @@ function updateStatusDisplay(status) {
         const ctxInput = document.getElementById('ctx-input');
         if (ctxInput && document.activeElement !== ctxInput) {
             ctxInput.value = status.selected_ctx;
+        }
+    }
+
+    // Mirror the server's remembered choice, except while a load is in flight:
+    // status still carries the old value until the new process is up.
+    if (preserveInputPristine && !currentLoadingModel) {
+        const preserveInput = document.getElementById('preserve-think-input');
+        if (preserveInput && document.activeElement !== preserveInput) {
+            preserveInput.checked = !!status.selected_preserve_think;
+            renderPreserveThinkState(preserveInput.checked);
         }
     }
 
@@ -409,12 +443,14 @@ function applyDashboardKind(kind) {
     const ttsStats = document.getElementById('stats-tts');
     const ctxControl = document.getElementById('ctx-control');
     const framesControl = document.getElementById('frames-control');
+    const preserveControl = document.getElementById('preserve-think-control');
 
     if (llmStats) llmStats.style.display = notLlm ? 'none' : '';
     if (sdStats) sdStats.style.display = isSd ? '' : 'none';
     if (ttsStats) ttsStats.style.display = isTts ? '' : 'none';
     if (ctxControl) ctxControl.style.display = notLlm ? 'none' : '';
     if (framesControl) framesControl.style.display = isTts ? '' : 'none';
+    if (preserveControl) preserveControl.style.display = notLlm ? 'none' : '';
 }
 
 function updateActiveModel(status) {

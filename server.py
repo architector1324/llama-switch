@@ -586,6 +586,9 @@ def get_v1_models():
 
     # Text models only, or chat clients would offer sd-server as a chat model.
     models_data = state.config_mgr.get_models("llm")
+
+    # The window the next llm load will actually get — same expression the load path uses.
+    effective_ctx = state.selected_ctx or state.default_ctx
     model_list_openai = []
     model_list_custom = []
 
@@ -617,7 +620,8 @@ def get_v1_models():
                     "meta": {
                         "vocab_type": 1,
                         "n_vocab": 32000,  # Dummy
-                        "n_ctx_train": 4096,  # Dummy
+                        "n_ctx": effective_ctx,
+                        "n_ctx_train": effective_ctx,
                         "n_embd": 4096,  # Dummy
                         "n_params": 7000000000,  # Dummy
                         "size": 4000000000,  # Dummy

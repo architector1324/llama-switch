@@ -304,6 +304,20 @@ body {
     cursor: pointer;
 }
 
+.res-select {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: var(--font-mono);
+    padding: 8px 12px;
+    width: fit-content;
+    outline: none;
+    cursor: pointer;
+}
+
+.res-select:focus,
 .quant-select:focus {
     border-color: var(--primary);
 }
@@ -409,6 +423,7 @@ body {
 
 .dash-column {
     flex: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 20px;

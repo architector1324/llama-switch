@@ -161,6 +161,7 @@ class ServiceState:
         self.current_quant: Optional[str] = None
         self.current_ctx: int = 0
         self.current_frames: int = 0
+        self.current_res: str = ""
         self.current_port: int = 0
         self.current_kind: Optional[str] = None
         self.default_ctx: int = 4096
@@ -172,6 +173,10 @@ class ServiceState:
         # Frame cap for tts, apart from ctx: 2048 frames at 12.5/s is about 164 s.
         self.default_frames: int = 2048
         self.selected_frames: int = 0
+        # Output size for sd, as "WxH". Sticky like selected_frames: a stop or an
+        # llm load must not reset it.
+        self.default_res: str = "1024x1024"
+        self.selected_res: str = ""
         self.host: str = "0.0.0.0"
         self.ready: bool = False
         self.logs = deque(maxlen=2000)
@@ -388,12 +393,17 @@ def log_reader(proc, log_queue):
         print(f"[Service] Log Reader Thread Crashed: {e}")
 
 
+# Goes straight into a shell command line, so nothing but digits and one "x".
+RE_RES = re.compile(r"^(\d{2,5})x(\d{2,5})$")
+
+
 # --- API Models ---
 class StartRequest(BaseModel):
     model_key: str
     quantization: Optional[str] = None
     ctx: Optional[int] = None
     frames: Optional[int] = None
+    res: Optional[str] = None
     preserve_think: Optional[bool] = None
 
 
@@ -453,6 +463,7 @@ def _start_model_server(
     quantization: Optional[str] = None,
     ctx: Optional[int] = None,
     frames: Optional[int] = None,
+    res: Optional[str] = None,
     preserve_think: Optional[bool] = None,
 ) -> Dict:
     if not state.config_mgr:
@@ -489,6 +500,15 @@ def _start_model_server(
     if frames is None:
         frames = state.selected_frames or state.default_frames
 
+    # Same precedence as frames. Only profiles that spell ${WIDTH}/${HEIGHT} use it.
+    if res is None:
+        res = state.selected_res or state.default_res
+    m_res = RE_RES.match(res.strip().lower())
+    if not m_res:
+        raise ValueError(f"Resolution must look like 1024x1024, got {res!r}")
+    width, height = m_res.group(1), m_res.group(2)
+    res = f"{width}x{height}"
+
     # Same precedence as ctx: an explicit request, then the last llm choice.
     if preserve_think is None:
         preserve_think = state.selected_preserve_think
@@ -501,12 +521,16 @@ def _start_model_server(
     cmd_str = cmd_template.replace("${PORT}", str(port))
     cmd_str = cmd_str.replace("${CTX}", str(ctx))
     cmd_str = cmd_str.replace("${FRAMES}", str(frames))
+    cmd_str = cmd_str.replace("${WIDTH}", width)
+    cmd_str = cmd_str.replace("${HEIGHT}", height)
     cmd_str = cmd_str.replace("${HOST}", state.host)
     cmd_str = cmd_str.replace("${PRESERVE_THINK}", preserve_flag)
     # Bare forms, for configs written without the braces.
     cmd_str = cmd_str.replace("$PORT", str(port))
     cmd_str = cmd_str.replace("$CTX", str(ctx))
     cmd_str = cmd_str.replace("$FRAMES", str(frames))
+    cmd_str = cmd_str.replace("$WIDTH", width)
+    cmd_str = cmd_str.replace("$HEIGHT", height)
     cmd_str = cmd_str.replace("$HOST", state.host)
     cmd_str = cmd_str.replace("$PRESERVE_THINK", preserve_flag)
 
@@ -536,6 +560,9 @@ def _start_model_server(
             state.current_frames = frames if kind == "tts" else 0
             if kind == "tts":
                 state.selected_frames = frames
+            state.current_res = res if kind == "sd" else ""
+            if kind == "sd":
+                state.selected_res = res
             state.current_port = port
             state.current_kind = kind
 
@@ -563,6 +590,7 @@ def get_config():
             "kinds": {},
             "default_ctx": state.default_ctx,
             "default_frames": state.default_frames,
+            "default_res": state.default_res,
         }
 
     models = state.config_mgr.get_models()
@@ -575,6 +603,7 @@ def get_config():
         "kinds": {key: state.config_mgr.get_kind(key) for key in models},
         "default_ctx": state.default_ctx,
         "default_frames": state.default_frames,
+        "default_res": state.default_res,
     }
 
 
@@ -668,6 +697,8 @@ def get_status():
             "selected_preserve_think": state.selected_preserve_think,
             "frames": state.current_frames,
             "selected_frames": state.selected_frames or state.default_frames,
+            "res": state.current_res,
+            "selected_res": state.selected_res or state.default_res,
             "port": state.current_port if is_running else None,
             "host": state.host,
             "pid": state.process.pid if state.process and is_running else None,
@@ -698,7 +729,12 @@ def stop_server():
 def start_server(req: StartRequest):
     try:
         updated_data = _start_model_server(
-            req.model_key, req.quantization, req.ctx, req.frames, req.preserve_think
+            req.model_key,
+            req.quantization,
+            req.ctx,
+            req.frames,
+            req.res,
+            req.preserve_think,
         )
         return {"status": "started", **updated_data}
     except ValueError as e:

@@ -71,6 +71,10 @@ async function fetchConfig() {
         if (data.default_frames) {
             document.getElementById('frames-input').value = data.default_frames;
         }
+        if (data.default_res) {
+            const resInput = document.getElementById('res-input');
+            if (resInput) resInput.value = data.default_res;
+        }
         renderModelList(data.models || {});
     } catch (e) {
         console.error("Failed to load config", e);
@@ -173,6 +177,10 @@ async function loadModel(key, quantization = null) {
     // Frames is tts-only: an llm-sized ctx makes no sense as a frame cap.
     const framesInput = document.getElementById('frames-input');
     const frames = parseInt(framesInput.value) || 2048;
+    // sd-only: the picker lists sizes, profiles opt in with ${WIDTH}/${HEIGHT}.
+    const resInput = document.getElementById('res-input');
+    // Not "res": the fetch below binds that name in this block and would shadow it.
+    const outputRes = resInput ? resInput.value : null;
     // A launch flag, not a runtime one: it only takes effect on this load.
     const preserveInput = document.getElementById('preserve-think-input');
     const preserveThink = preserveInput ? preserveInput.checked : false;
@@ -184,7 +192,7 @@ async function loadModel(key, quantization = null) {
         const res = await fetch('/api/start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model_key: key, quantization: quantization, ctx: ctx, frames: frames, preserve_think: preserveThink })
+            body: JSON.stringify({ model_key: key, quantization: quantization, ctx: ctx, frames: frames, res: outputRes, preserve_think: preserveThink })
         });
         
         if (!res.ok) {
@@ -238,6 +246,13 @@ async function applyPreserveThinkChange() {
 async function applyFramesChange() {
     if (!lastStatus || !lastStatus.running || !lastStatus.model) {
         return; // Nothing to do if stopped
+    }
+    loadModel(lastStatus.model, lastStatus.quantization);
+}
+
+async function applyResChange() {
+    if (!lastStatus || !lastStatus.running || !lastStatus.model) {
+        return; // Nothing loaded: the pick just waits for the next start
     }
     loadModel(lastStatus.model, lastStatus.quantization);
 }
@@ -316,6 +331,13 @@ function updateStatusDisplay(status) {
         if (preserveInput && document.activeElement !== preserveInput) {
             preserveInput.checked = !!status.selected_preserve_think;
             renderPreserveThinkState(preserveInput.checked);
+        }
+    }
+
+    if (status.selected_res) {
+        const resInput = document.getElementById('res-input');
+        if (resInput && document.activeElement !== resInput) {
+            resInput.value = status.selected_res;
         }
     }
 
@@ -443,6 +465,7 @@ function applyDashboardKind(kind) {
     const ttsStats = document.getElementById('stats-tts');
     const ctxControl = document.getElementById('ctx-control');
     const framesControl = document.getElementById('frames-control');
+    const resControl = document.getElementById('res-control');
     const preserveControl = document.getElementById('preserve-think-control');
 
     if (llmStats) llmStats.style.display = notLlm ? 'none' : '';
@@ -450,6 +473,7 @@ function applyDashboardKind(kind) {
     if (ttsStats) ttsStats.style.display = isTts ? '' : 'none';
     if (ctxControl) ctxControl.style.display = notLlm ? 'none' : '';
     if (framesControl) framesControl.style.display = isTts ? '' : 'none';
+    if (resControl) resControl.style.display = isSd ? '' : 'none';
     if (preserveControl) preserveControl.style.display = notLlm ? 'none' : '';
 }
 

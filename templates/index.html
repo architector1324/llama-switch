@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Llama Switch</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=6">
+    <link rel="stylesheet" href="/static/css/style.css?v=7">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body class="dark-theme">
@@ -138,6 +138,33 @@
                                 </div>
                             </div>
 
+
+                            <div class="control-group compact-group" id="res-control" style="display: none;">
+                                <label for="res-input" title="Output size for image models. Applied when the model loads, so changing it reloads it. Only profiles written with ${WIDTH}/${HEIGHT} follow it.">Output Size</label>
+                                <div class="input-wrapper">
+                                    <select id="res-input" class="res-select" onchange="applyResChange()">
+                                        <optgroup label="1 MP">
+                                            <option value="1024x1024">1024x1024 [1:1]</option>
+                                            <option value="848x1264">848x1264 [2:3]</option>
+                                            <option value="1264x848">1264x848 [3:2]</option>
+                                            <option value="768x1376">768x1376 [9:16]</option>
+                                            <option value="896x1200">896x1200 [3:4]</option>
+                                            <option value="1376x768">1376x768 [16:9]</option>
+                                            <option value="1200x896">1200x896 [4:3]</option>
+                                        </optgroup>
+                                        <optgroup label="4 MP">
+                                            <option value="2048x2048">2048x2048 [1:1]</option>
+                                            <option value="2400x1792">2400x1792 [4:3]</option>
+                                            <option value="1792x2400">1792x2400 [3:4]</option>
+                                            <option value="2528x1696">2528x1696 [3:2]</option>
+                                            <option value="1696x2528">1696x2528 [2:3]</option>
+                                            <option value="2752x1536">2752x1536 [16:9]</option>
+                                            <option value="1536x2752">1536x2752 [9:16]</option>
+                                        </optgroup>
+                                    </select>
+                                </div>
+                            </div>
+
                             <div class="stat-box status-box">
                                 <span class="label">Current Model</span>
                                 <span class="value primary-text" id="current-model">-</span>
@@ -166,6 +193,6 @@
             </section>
         </main>
     </div>
-    <script src="/static/js/app.js?v=10"></script>
+    <script src="/static/js/app.js?v=11"></script>
 </body>
 </html>

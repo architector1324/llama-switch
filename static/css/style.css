@@ -225,7 +225,7 @@ body {
 .model-list-header {
     display: grid;
     grid-template-columns: 1fr auto;
-    padding: 0 24px 12px;
+    padding: 2px 24px 12px;
     border-bottom: 1px solid var(--border);
     font-size: 11px;
     font-weight: 600;
@@ -719,4 +719,35 @@ input[type="number"]:focus {
     .panel-header h2 {
         font-size: 16px;
     }
+}
+
+
+.section-tabs {
+    display: flex;
+    gap: 4px;
+    /* Same 24px gutter as the panel header and the list header below. No border of
+       its own: the list header already draws one, and two rules this close crowd. */
+    padding: 0 24px 18px;
+}
+
+.section-tab {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+    padding: 5px 12px;
+}
+
+.section-tab:hover {
+    color: var(--text-primary);
+    background: var(--bg-input);
+}
+
+.section-tab.active {
+    background: var(--bg-input);
+    border-color: var(--primary);
+    color: var(--text-primary);
 }

@@ -75,7 +75,13 @@ async function fetchConfig() {
             const resInput = document.getElementById('res-input');
             if (resInput) resInput.value = data.default_res;
         }
+        if (lastStatus && lastStatus.running && lastStatus.kind) {
+            activeSection = lastStatus.kind;
+            localStorage.setItem('activeSection', activeSection);
+        }
+        renderSectionTabs();
         renderModelList(data.models || {});
+        applyDashboardKind(activeSection);
     } catch (e) {
         console.error("Failed to load config", e);
         document.getElementById('model-list').innerHTML = '<div class="model-item">Error loading config</div>';
@@ -83,6 +89,31 @@ async function fetchConfig() {
 }
 
 const SECTION_LABELS = { llm: 'Language', sd: 'Image', tts: 'Speech', music: 'Music' };
+
+// The dashboard follows the tab, not the running model: otherwise it stays on
+// Language until an image model is loaded for the first time.
+let activeSection = localStorage.getItem('activeSection') || 'llm';
+
+function renderSectionTabs() {
+    const bar = document.getElementById('section-tabs');
+    if (!bar || !currentConfig || !currentConfig.sections) return;
+    const names = Object.keys(currentConfig.sections).filter(
+        n => Object.keys(currentConfig.sections[n] || {}).length > 0
+    );
+    if (names.length && !names.includes(activeSection)) activeSection = names[0];
+    bar.innerHTML = names.map(n =>
+        `<button class="section-tab${n === activeSection ? ' active' : ''}" onclick="selectSection('${n}')">${SECTION_LABELS[n] || n}</button>`
+    ).join('');
+}
+
+function selectSection(name) {
+    activeSection = name;
+    localStorage.setItem('activeSection', name);
+    renderSectionTabs();
+    renderModelList(currentConfig ? currentConfig.models || {} : {});
+    applyDashboardKind(activeSection);
+    if (lastStatus) updateStatusDisplay(lastStatus);
+}
 
 function renderModelList(models) {
     const list = document.getElementById('model-list');
@@ -100,11 +131,14 @@ function renderModelList(models) {
         return;
     }
 
-    Object.keys(sections).forEach(name => {
-        const keys = Object.keys(sections[name] || {}).sort();
-        if (keys.length === 0) return;
-        renderModelGroup(list, sections[name], keys, name);
-    });
+    const group = sections[activeSection] || {};
+    const keys = Object.keys(group).sort();
+    if (keys.length === 0) {
+        list.innerHTML = '<div class="loading">No models in this section</div>';
+        return;
+    }
+    // The tab already names the section, so no group header here.
+    renderModelGroup(list, group, keys, null);
 }
 
 function renderModelGroup(list, models, modelKeys, sectionName) {
@@ -187,6 +221,9 @@ async function loadModel(key, quantization = null) {
     const preserveInput = document.getElementById('preserve-think-input');
     const preserveThink = preserveInput ? preserveInput.checked : false;
     
+    const kind = currentConfig && currentConfig.kinds ? currentConfig.kinds[key] : null;
+    if (kind && kind !== activeSection) selectSection(kind);
+
     currentLoadingModel = key;
     updateButtonsState(lastStatus);
 
@@ -372,7 +409,18 @@ function updateStatusDisplay(status) {
     const modelText = document.getElementById('current-model');
     const webuiBtn = document.getElementById('webui-btn');
     
-    applyDashboardKind(status.kind);
+    applyDashboardKind(activeSection);
+
+    // Looking at a tab whose backend is not the running one: the numbers on screen
+    // would belong to someone else, so blank them rather than leave them stale.
+    if (!status.running || status.kind !== activeSection) {
+        ['stat-gen-speed', 'stat-prompt-speed', 'stat-total-tokens', 'stat-ctx-usage',
+         'stat-sd-speed', 'stat-sd-last', 'stat-sd-progress', 'stat-sd-images',
+         'stat-tts-rtf', 'stat-tts-last', 'stat-tts-frames', 'stat-tts-clips'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.innerText = '-';
+        });
+    }
 
     if (status.running) {
         indicator.classList.add('on');

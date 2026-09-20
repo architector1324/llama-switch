@@ -396,6 +396,69 @@ def log_reader(proc, log_queue):
         print(f"[Service] Log Reader Thread Crashed: {e}")
 
 
+def slots_poller(proc, port):
+    """Live pp/tg while a request is in flight.
+
+    llama-server prints its timings only when a request finishes, so the dashboard
+    sat on the previous request's numbers until the next one ended. /slots is on by
+    default and counts tokens as they come, so the rate is a difference over time.
+    The log parser still overwrites both with the exact figures at the end.
+    """
+    url = f"http://127.0.0.1:{port}/slots"
+    prev_t = prev_dec = prev_pp = None
+    prev_busy = False
+    client = httpx.Client(timeout=1.0)
+    while proc.poll() is None:
+        time.sleep(1.0)
+        try:
+            slots = client.get(url).json()
+            if not isinstance(slots, list):
+                raise ValueError("no slots")
+        except Exception:
+            # --no-slots, a backend that has no such endpoint, or a restart.
+            prev_t = prev_dec = prev_pp = None
+            prev_busy = False
+            continue
+
+        # Context fill, live. The log only says it once the request is released, and
+        # n_ctx is what the engine actually ended up with rather than what we asked for.
+        ctx_used = sum(sl.get("n_prompt_tokens") or 0 for sl in slots)
+        ctx_limit = max((sl.get("n_ctx") or 0) for sl in slots)
+        with state.lock:
+            if ctx_used:
+                state.stats["ctx_used"] = ctx_used
+            if ctx_limit:
+                state.stats["ctx_limit"] = ctx_limit
+
+        busy = any(sl.get("is_processing") for sl in slots)
+        dec = pp = 0
+        for sl in slots:
+            nt = sl.get("next_token")
+            if isinstance(nt, list) and nt:
+                dec += nt[0].get("n_decoded") or 0
+            dec += sl.get("n_decoded") or 0
+            pp += sl.get("n_prompt_tokens_processed") or 0
+
+        now = time.monotonic()
+        # Both ends of the window must fall inside the request. Otherwise the first
+        # window also covers the idle time before it and reports far too little: a
+        # prefill that takes a tenth of a second looked like a whole second of it.
+        if busy and prev_busy and prev_t is not None:
+            dt = now - prev_t
+            # A counter that dropped means a new request started: rebase, do not
+            # report a negative rate.
+            if dt > 0:
+                if dec > prev_dec:
+                    with state.lock:
+                        state.stats["gen_speed"] = (dec - prev_dec) / dt
+                if pp > prev_pp:
+                    with state.lock:
+                        state.stats["prompt_speed"] = (pp - prev_pp) / dt
+        prev_t, prev_dec, prev_pp, prev_busy = now, dec, pp, busy
+
+    client.close()
+
+
 # Goes straight into a shell command line, so nothing but digits and one "x".
 RE_RES = re.compile(r"^(\d{2,5})x(\d{2,5})$")
 
@@ -587,6 +650,11 @@ def _start_model_server(
                 target=log_reader, args=(state.process, state.logs), daemon=True
             )
             t.start()
+
+            if kind == "llm":
+                threading.Thread(
+                    target=slots_poller, args=(state.process, port), daemon=True
+                ).start()
 
         except Exception as e:
             state.process = None

@@ -162,6 +162,7 @@ class ServiceState:
         self.current_ctx: int = 0
         self.current_frames: int = 0
         self.current_res: str = ""
+        self.current_hires: bool = False
         self.current_port: int = 0
         self.current_kind: Optional[str] = None
         self.default_ctx: int = 4096
@@ -177,6 +178,8 @@ class ServiceState:
         # llm load must not reset it.
         self.default_res: str = "1024x1024"
         self.selected_res: str = ""
+        # Second sd pass. Sticky like selected_res.
+        self.selected_hires: bool = False
         self.host: str = "0.0.0.0"
         self.ready: bool = False
         self.logs = deque(maxlen=2000)
@@ -396,6 +399,11 @@ def log_reader(proc, log_queue):
 # Goes straight into a shell command line, so nothing but digits and one "x".
 RE_RES = re.compile(r"^(\d{2,5})x(\d{2,5})$")
 
+# ${HIRES:<flags>} keeps each model's own hires settings next to the model, because
+# they differ: a denoise strength for the image models, a whole upscaler block for ltx.
+# On, the flags go in verbatim; off, the whole placeholder disappears.
+RE_HIRES = re.compile(r"\$\{HIRES:([^}]*)\}")
+
 
 # --- API Models ---
 class StartRequest(BaseModel):
@@ -404,6 +412,7 @@ class StartRequest(BaseModel):
     ctx: Optional[int] = None
     frames: Optional[int] = None
     res: Optional[str] = None
+    hires: Optional[bool] = None
     preserve_think: Optional[bool] = None
 
 
@@ -464,6 +473,7 @@ def _start_model_server(
     ctx: Optional[int] = None,
     frames: Optional[int] = None,
     res: Optional[str] = None,
+    hires: Optional[bool] = None,
     preserve_think: Optional[bool] = None,
 ) -> Dict:
     if not state.config_mgr:
@@ -509,6 +519,9 @@ def _start_model_server(
     width, height = m_res.group(1), m_res.group(2)
     res = f"{width}x{height}"
 
+    if hires is None:
+        hires = state.selected_hires
+
     # Same precedence as ctx: an explicit request, then the last llm choice.
     if preserve_think is None:
         preserve_think = state.selected_preserve_think
@@ -521,6 +534,8 @@ def _start_model_server(
     cmd_str = cmd_template.replace("${PORT}", str(port))
     cmd_str = cmd_str.replace("${CTX}", str(ctx))
     cmd_str = cmd_str.replace("${FRAMES}", str(frames))
+    cmd_str = RE_HIRES.sub((lambda m: m.group(1)) if hires else "", cmd_str)
+    cmd_str = cmd_str.replace("${HIRES}", "--hires" if hires else "")
     cmd_str = cmd_str.replace("${WIDTH}", width)
     cmd_str = cmd_str.replace("${HEIGHT}", height)
     cmd_str = cmd_str.replace("${HOST}", state.host)
@@ -561,8 +576,10 @@ def _start_model_server(
             if kind == "tts":
                 state.selected_frames = frames
             state.current_res = res if kind == "sd" else ""
+            state.current_hires = hires if kind == "sd" else False
             if kind == "sd":
                 state.selected_res = res
+                state.selected_hires = hires
             state.current_port = port
             state.current_kind = kind
 
@@ -699,6 +716,8 @@ def get_status():
             "selected_frames": state.selected_frames or state.default_frames,
             "res": state.current_res,
             "selected_res": state.selected_res or state.default_res,
+            "hires": state.current_hires,
+            "selected_hires": state.selected_hires,
             "port": state.current_port if is_running else None,
             "host": state.host,
             "pid": state.process.pid if state.process and is_running else None,
@@ -734,6 +753,7 @@ def start_server(req: StartRequest):
             req.ctx,
             req.frames,
             req.res,
+            req.hires,
             req.preserve_think,
         )
         return {"status": "started", **updated_data}

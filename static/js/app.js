@@ -181,6 +181,8 @@ async function loadModel(key, quantization = null) {
     const resInput = document.getElementById('res-input');
     // Not "res": the fetch below binds that name in this block and would shadow it.
     const outputRes = resInput ? resInput.value : null;
+    const hiresInput = document.getElementById('hires-input');
+    const hires = hiresInput ? hiresInput.checked : false;
     // A launch flag, not a runtime one: it only takes effect on this load.
     const preserveInput = document.getElementById('preserve-think-input');
     const preserveThink = preserveInput ? preserveInput.checked : false;
@@ -192,7 +194,7 @@ async function loadModel(key, quantization = null) {
         const res = await fetch('/api/start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model_key: key, quantization: quantization, ctx: ctx, frames: frames, res: outputRes, preserve_think: preserveThink })
+            body: JSON.stringify({ model_key: key, quantization: quantization, ctx: ctx, frames: frames, res: outputRes, hires: hires, preserve_think: preserveThink })
         });
         
         if (!res.ok) {
@@ -246,6 +248,16 @@ async function applyPreserveThinkChange() {
 async function applyFramesChange() {
     if (!lastStatus || !lastStatus.running || !lastStatus.model) {
         return; // Nothing to do if stopped
+    }
+    loadModel(lastStatus.model, lastStatus.quantization);
+}
+
+async function applyHiresChange() {
+    const st = document.getElementById('hires-state');
+    const input = document.getElementById('hires-input');
+    if (st && input) st.innerText = input.checked ? 'On' : 'Off';
+    if (!lastStatus || !lastStatus.running || !lastStatus.model) {
+        return; // Nothing loaded: the toggle just waits for the next start
     }
     loadModel(lastStatus.model, lastStatus.quantization);
 }
@@ -332,6 +344,13 @@ function updateStatusDisplay(status) {
             preserveInput.checked = !!status.selected_preserve_think;
             renderPreserveThinkState(preserveInput.checked);
         }
+    }
+
+    const hiresInput = document.getElementById('hires-input');
+    if (hiresInput && document.activeElement !== hiresInput) {
+        hiresInput.checked = !!status.selected_hires;
+        const hiresState = document.getElementById('hires-state');
+        if (hiresState) hiresState.innerText = status.selected_hires ? 'On' : 'Off';
     }
 
     if (status.selected_res) {
@@ -466,6 +485,7 @@ function applyDashboardKind(kind) {
     const ctxControl = document.getElementById('ctx-control');
     const framesControl = document.getElementById('frames-control');
     const resControl = document.getElementById('res-control');
+    const hiresControl = document.getElementById('hires-control');
     const preserveControl = document.getElementById('preserve-think-control');
 
     if (llmStats) llmStats.style.display = notLlm ? 'none' : '';
@@ -474,6 +494,7 @@ function applyDashboardKind(kind) {
     if (ctxControl) ctxControl.style.display = notLlm ? 'none' : '';
     if (framesControl) framesControl.style.display = isTts ? '' : 'none';
     if (resControl) resControl.style.display = isSd ? '' : 'none';
+    if (hiresControl) hiresControl.style.display = isSd ? '' : 'none';
     if (preserveControl) preserveControl.style.display = notLlm ? 'none' : '';
 }
 

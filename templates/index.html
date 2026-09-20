@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Llama Switch</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=7">
+    <link rel="stylesheet" href="/static/css/style.css?v=8">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body class="dark-theme">
@@ -162,6 +162,17 @@
                                             <option value="1536x2752">1536x2752 [9:16]</option>
                                         </optgroup>
                                     </select>
+                                </div>
+                            </div>
+
+                            <div class="control-group compact-group" id="hires-control" style="display: none;">
+                                <label for="hires-input" title="Second pass at twice the size. The first pass keeps Output Size, so the result is 2x it. Each profile carries its own hires settings; this only switches them on. Applied when the model loads, so toggling reloads it.">Hires Fix</label>
+                                <div class="input-wrapper">
+                                    <label class="switch">
+                                        <input type="checkbox" id="hires-input" onchange="applyHiresChange()">
+                                        <span class="switch-track"><span class="switch-thumb"></span></span>
+                                    </label>
+                                    <span class="switch-state" id="hires-state">Off</span>
                                 </div>
                             </div>
 

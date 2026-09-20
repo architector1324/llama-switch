@@ -435,10 +435,17 @@ body {
     padding-right: 24px;
 }
 
+/* Halves of the stats column, so the second column starts at the same x in every
+   row. Sized to content the boxes drifted: a box is as wide as its longest line, and
+   space-between pinned the right edge, so a short label pushed its value sideways. */
 .stat-row {
     display: flex;
-    justify-content: space-between;
     gap: 16px;
+}
+
+.stat-row > .stat-box {
+    flex: 1;
+    min-width: 0;
 }
 
 .compact-group {

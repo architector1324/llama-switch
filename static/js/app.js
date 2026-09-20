@@ -2,8 +2,13 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchConfig();
     startPolling();
     
+    const copyBtn = document.getElementById('copy-logs-btn');
     const clearBtn = document.getElementById('clear-logs-btn');
     const scrollBtn = document.getElementById('scroll-logs-btn');
+    if (copyBtn) {
+        copyBtn.addEventListener('click', copyLogs);
+        setupMobileButton(copyBtn, copyLogs);
+    }
     if (clearBtn) {
         clearBtn.addEventListener('click', clearLogs);
         setupMobileButton(clearBtn, clearLogs);
@@ -611,6 +616,39 @@ function escapeHtml(text) {
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&#039;");
+}
+
+async function copyLogs() {
+    const btn = document.getElementById('copy-logs-btn');
+    let ok = false;
+    try {
+        const res = await fetch('/api/logs');
+        const text = (await res.json()).join('\n');
+        // navigator.clipboard exists only on a secure origin, and the dashboard is
+        // plain http on the LAN, which is exactly where the phone opens it.
+        if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+        } else {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.setAttribute('readonly', '');
+            ta.style.position = 'fixed';
+            ta.style.top = '-1000px';
+            document.body.appendChild(ta);
+            ta.select();
+            ta.setSelectionRange(0, ta.value.length);
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+        }
+        ok = true;
+    } catch (e) {
+        console.error('Failed to copy logs:', e);
+    }
+    if (btn) {
+        const before = btn.innerText;
+        btn.innerText = ok ? '✓' : '✗';
+        setTimeout(() => { btn.innerText = before; }, 1200);
+    }
 }
 
 function clearLogs() {

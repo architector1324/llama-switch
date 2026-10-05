@@ -53,7 +53,7 @@ def find_free_port():
 
 
 # --- Config Manager ---
-SECTIONS = ("llm", "sd", "tts", "music")
+SECTIONS = ("llm", "sd", "tts", "music", "decision")
 
 
 class ConfigManager:
@@ -300,6 +300,17 @@ def log_reader(proc, log_queue):
     # qwentts.cpp progress: "[Pipeline] Generated 1920 frames (slot 0)"
     re_tts_step = re.compile(r"\[Pipeline\] Generated (\d+) frames")
 
+    # Decision models print no print_timing at all, only the slot lifecycle. The
+    # request's cost is the gap between these two lines; llama.cpp's own log clock
+    # is used rather than ours, so pipe latency does not creep into the number.
+    #   1.17.598.882 I slot launch_slot_: id  0 | task 0 | processing task
+    #   1.18.108.321 I slot      release: id  0 | task 0 | stop processing: n_tokens = 449
+    re_dec_start = re.compile(r"^(\d+)\.(\d+)\.(\d+)\.(\d+).*launch_slot_.*processing task")
+    re_dec_done = re.compile(
+        r"^(\d+)\.(\d+)\.(\d+)\.(\d+).*release:.*stop processing: n_tokens = (\d+)"
+    )
+    dec_started: Optional[float] = None
+
     # "[Perf] Total 36762.3 ms (2048 frames, 16.67 ms/frame AR, audio 163.84 s, RTF 0.224)"
     re_tts_done = re.compile(
         r"\[Perf\] Total\s+([\d\.]+)\s*ms\s*\((\d+)\s*frames.*?audio\s+([\d\.]+)\s*s,\s*RTF\s+([\d\.]+)\)"
@@ -320,6 +331,33 @@ def log_reader(proc, log_queue):
                     with state.lock:
                         if not state.ready:
                             state.ready = True
+
+                try:
+                    # M.SS.mmm.uuu since server start.
+                    def _log_seconds(m):
+                        return (
+                            int(m.group(1)) * 60
+                            + int(m.group(2))
+                            + int(m.group(3)) / 1000
+                            + int(m.group(4)) / 1_000_000
+                        )
+
+                    ds = re_dec_start.search(decoded)
+                    if ds:
+                        dec_started = _log_seconds(ds)
+                    dd = re_dec_done.search(decoded)
+                    if dd and dec_started is not None:
+                        with state.lock:
+                            state.stats["decision_ms"] = (
+                                _log_seconds(dd) - dec_started
+                            ) * 1000
+                            state.stats["decision_tokens"] = int(dd.group(5))
+                            state.stats["decision_count"] = (
+                                state.stats.get("decision_count", 0) + 1
+                            )
+                        dec_started = None
+                except Exception:
+                    pass
 
                 try:
                     pm = re_prompt.search(decoded)
@@ -631,7 +669,9 @@ def _start_model_server(
             state.current_model = model_key
             state.current_quant = actual_quant
             # sd-server has no context window; reporting one skews the UI gauge.
-            state.current_ctx = ctx if kind == "llm" else 0
+            # Decision models do take -c, so they report it too; only the sticky
+            # selected_ctx stays an llm notion.
+            state.current_ctx = ctx if kind in ("llm", "decision") else 0
             if kind == "llm":
                 state.selected_ctx = ctx
                 state.selected_preserve_think = preserve_think
@@ -1032,6 +1072,17 @@ async def _proxy_to_current(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Proxy error: {str(e)}")
+
+
+@app.post("/v1/systemone")
+async def systemone(request: Request):
+    """TypeSafe-compatible System One API of the running decision model.
+
+    Decision models answer typed questions in one forward pass and generate no
+    text, so they get their own section rather than sharing the llm one. clef in
+    particular serves this endpoint only.
+    """
+    return await _proxy_to_current(request, "v1/systemone", kind="decision")
 
 
 @app.api_route("/v1/images/{path:path}", methods=["GET", "POST"])

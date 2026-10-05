@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Llama Switch</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=12">
+    <link rel="stylesheet" href="/static/css/style.css?v=13">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body class="dark-theme">
@@ -87,6 +87,23 @@
                                     </div>
                                 </div>
                             </div>
+                            <div id="stats-decision" style="display: none;">
+                                <div class="stat-row">
+                                    <div class="stat-box">
+                                        <span class="label">Decision</span>
+                                        <span class="value" id="stat-dec-ms">-</span>
+                                    </div>
+                                    <div class="stat-box">
+                                        <span class="label">Prompt</span>
+                                        <span class="value" id="stat-dec-tokens">-</span>
+                                    </div>
+                                    <div class="stat-box">
+                                        <span class="label">Requests</span>
+                                        <span class="value" id="stat-dec-count">-</span>
+                                    </div>
+                                </div>
+                            </div>
+
                             <div id="stats-tts" style="display: none;">
                                 <div class="stat-row">
                                     <div class="stat-box">
@@ -206,6 +223,6 @@
             </section>
         </main>
     </div>
-    <script src="/static/js/app.js?v=12"></script>
+    <script src="/static/js/app.js?v=17"></script>
 </body>
 </html>

@@ -93,7 +93,7 @@ async function fetchConfig() {
     }
 }
 
-const SECTION_LABELS = { llm: 'Language', sd: 'Image', tts: 'Speech', music: 'Music' };
+const SECTION_LABELS = { llm: 'Language', sd: 'Image', tts: 'Speech', music: 'Music', decision: 'Decision' };
 
 // The dashboard follows the tab, not the running model: otherwise it stays on
 // Language until an image model is loaded for the first time.
@@ -470,6 +470,18 @@ function updateStatusDisplay(status) {
 
             const clEl = document.getElementById('stat-tts-clips');
             if (clEl) clEl.innerText = s.tts_clips || 0;
+        } else if (status.stats && status.kind === 'decision') {
+            const s = status.stats;
+
+            // The server's own clock, so it excludes the trip to the client.
+            const msEl = document.getElementById('stat-dec-ms');
+            if (msEl) msEl.innerText = s.decision_ms ? `${Math.round(s.decision_ms)} ms` : '-';
+
+            const tkEl = document.getElementById('stat-dec-tokens');
+            if (tkEl) tkEl.innerText = s.decision_tokens ? `${s.decision_tokens} tokens` : '-';
+
+            const cnEl = document.getElementById('stat-dec-count');
+            if (cnEl) cnEl.innerText = s.decision_count || 0;
         } else if (status.stats && status.kind !== 'music') {
             const used = status.stats.ctx_used || 0;
             const limit = status.ctx || 0;
@@ -487,7 +499,9 @@ function updateStatusDisplay(status) {
             if(totalTokensEl) totalTokensEl.innerText = status.stats.total_tokens || 0;
         }
 
-        if (status.ready) {
+        // Decision models serve /v1/systemone and nothing else: clef has no web page
+        // at all, so the button would open a blank engine root.
+        if (status.ready && status.kind !== 'decision') {
             webuiBtn.style.display = 'inline-block';
             // Straight to the engine's own address: every engine page calls its own
             // paths absolutely, so none of them survive being served under a prefix.
@@ -531,10 +545,14 @@ function applyDashboardKind(kind) {
     // Music has no counters of its own yet, but it is not a language model either:
     // showing the llm block would report someone else's tokens.
     const isMusic = kind === 'music';
-    const notLlm = isSd || isTts || isMusic;
+    // Decision models answer in one forward pass and generate no tokens, so the
+    // llm counters would read zero; they do take -c, so the context control stays.
+    const isDecision = kind === 'decision';
+    const notLlm = isSd || isTts || isMusic || isDecision;
     const llmStats = document.getElementById('stats-llm');
     const sdStats = document.getElementById('stats-sd');
     const ttsStats = document.getElementById('stats-tts');
+    const decStats = document.getElementById('stats-decision');
     const ctxControl = document.getElementById('ctx-control');
     const framesControl = document.getElementById('frames-control');
     const resControl = document.getElementById('res-control');
@@ -544,7 +562,8 @@ function applyDashboardKind(kind) {
     if (llmStats) llmStats.style.display = notLlm ? 'none' : '';
     if (sdStats) sdStats.style.display = isSd ? '' : 'none';
     if (ttsStats) ttsStats.style.display = isTts ? '' : 'none';
-    if (ctxControl) ctxControl.style.display = notLlm ? 'none' : '';
+    if (decStats) decStats.style.display = isDecision ? '' : 'none';
+    if (ctxControl) ctxControl.style.display = (notLlm && !isDecision) ? 'none' : '';
     if (framesControl) framesControl.style.display = isTts ? '' : 'none';
     if (resControl) resControl.style.display = isSd ? '' : 'none';
     if (hiresControl) hiresControl.style.display = isSd ? '' : 'none';

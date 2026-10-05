@@ -739,6 +739,9 @@ input[type="number"]:focus {
 
 .section-tabs {
     display: flex;
+    /* Five sections no longer fit on one row at the panel's width; without this the
+       last tab hangs past the panel border instead of moving to a second row. */
+    flex-wrap: wrap;
     gap: 4px;
     /* Same 24px gutter as the panel header and the list header below. No border of
        its own: the list header already draws one, and two rules this close crowd. */

@@ -308,6 +308,52 @@ async function applyPreserveThinkChange() {
     loadModel(lastStatus.model, lastStatus.quantization);
 }
 
+// Host-side buffers are named after the backend that pinned them (Vulkan_Host,
+// CUDA_Host) or after the CPU itself; everything else is a card.
+function isHostDevice(name) {
+    return /^CPU/i.test(name) || /_Host$/i.test(name);
+}
+
+// One box per place the weights and the cache actually landed, cards kept apart
+// and host buffers rolled into a single RAM figure.
+function renderMemDevices(devices) {
+    const row = document.getElementById('mem-devices-row');
+    if (!row) return;
+    if (!devices || !Object.keys(devices).length) {
+        row.innerHTML = '';
+        return;
+    }
+
+    const groups = new Map();
+    for (const [name, vals] of Object.entries(devices)) {
+        const key = isHostDevice(name) ? 'RAM' : name;
+        const acc = groups.get(key) || { model: 0, context: 0 };
+        acc.model += vals.model || 0;
+        acc.context += vals.context || 0;
+        groups.set(key, acc);
+    }
+
+    // Cards first, in their own order; RAM last, where it reads as the remainder.
+    const names = [...groups.keys()].sort((a, b) => {
+        if (a === 'RAM') return 1;
+        if (b === 'RAM') return -1;
+        return a.localeCompare(b);
+    });
+
+    row.innerHTML = names.map(name => {
+        const g = groups.get(name);
+        const title = `model ${formatMiB(g.model)} \u00b7 context ${formatMiB(g.context)}`;
+        return `<div class="stat-box"><span class="label" title="${title}">${name}</span>` +
+               `<span class="value">${formatMiB(g.model + g.context)}</span></div>`;
+    }).join('');
+}
+
+// The backend reports MiB; GiB reads better once a model is past a gigabyte.
+function formatMiB(mib) {
+    if (!mib) return '-';
+    return mib >= 1024 ? `${(mib / 1024).toFixed(2)} GiB` : `${Math.round(mib)} MiB`;
+}
+
 // The context window is per slot, so the KV the engine is asked for is that times
 // the slot count. Spell the total out: it is what the memory bill follows.
 function renderParallelHint() {
@@ -545,6 +591,14 @@ function updateStatusDisplay(status) {
 
             const totalTokensEl = document.getElementById('stat-total-tokens');
             if(totalTokensEl) totalTokensEl.innerText = status.stats.total_tokens || 0;
+
+            const memModelEl = document.getElementById('stat-mem-model');
+            if (memModelEl) memModelEl.innerText = formatMiB(status.stats.mem_model);
+
+            const memCtxEl = document.getElementById('stat-mem-context');
+            if (memCtxEl) memCtxEl.innerText = formatMiB(status.stats.mem_context);
+
+            renderMemDevices(status.stats.mem_devices);
         }
 
         // Decision models serve /v1/systemone and nothing else: clef has no web page
@@ -577,6 +631,14 @@ function updateStatusDisplay(status) {
         
         const totalTokensEl = document.getElementById('stat-total-tokens');
         if(totalTokensEl) totalTokensEl.innerText = '-';
+
+        const memModelEl = document.getElementById('stat-mem-model');
+        if (memModelEl) memModelEl.innerText = '-';
+
+        const memCtxEl = document.getElementById('stat-mem-context');
+        if (memCtxEl) memCtxEl.innerText = '-';
+
+        renderMemDevices(null);
 
         ['stat-sd-speed', 'stat-sd-last', 'stat-sd-progress', 'stat-sd-images',
          'stat-tts-rtf', 'stat-tts-last', 'stat-tts-frames', 'stat-tts-clips'].forEach(id => {

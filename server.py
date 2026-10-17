@@ -197,6 +197,10 @@ class ServiceState:
             "total_tokens": 0,  # Accumulated generation
             "prompt_speed": 0.0,
             "gen_speed": 0.0,
+            # Parsed out of the backend's own load-time lines; zero until it loads.
+            "mem_model": 0.0,
+            "mem_context": 0.0,
+            "mem_devices": {},
             # sd_speed is seconds per step whichever unit sd.cpp printed.
             "sd_step": 0,
             "sd_steps": 0,
@@ -241,6 +245,10 @@ def _stop_process_unsafe():
             "total_tokens": 0,
             "prompt_speed": 0.0,
             "gen_speed": 0.0,
+            # Parsed out of the backend's own load-time lines; zero until it loads.
+            "mem_model": 0.0,
+            "mem_context": 0.0,
+            "mem_devices": {},
             "sd_step": 0,
             "sd_steps": 0,
             "sd_speed": 0.0,
@@ -318,6 +326,33 @@ def log_reader(proc, log_queue):
     )
     dec_started: Optional[float] = None
 
+    # Memory, from llama.cpp's own lines. Backend-agnostic: the device name is
+    # whatever the backend calls itself, Vulkan0 or CUDA0 or CPU_Mapped.
+    #   load_tensors:      Vulkan0 model buffer size =   610.56 MiB
+    re_mem_model = re.compile(r"(\S+) model buffer size\s*=\s*([\d\.]+)\s*MiB")
+
+    # Only buffers that were really allocated. The "llama_kv_cache: size =" line
+    # looks tempting because it needs no device, but a draft model prints it for a
+    # cache it does not own -- it shares the target's ("sharing with layer N").
+    #   llama_kv_cache:    Vulkan0 KV buffer size =    51.00 MiB
+    re_mem_kv = re.compile(r"(\S+) KV buffer size\s*=\s*([\d\.]+)\s*MiB")
+
+    # The vision tower is loaded by clip, which names its device on one line and
+    # never prints a buffer size; mtmd prints the size once, earlier, with no device.
+    #   srv load_model: [mtmd] estimated worst-case memory usage of mmproj is 1817.01 MiB
+    #   clip_ctx: CLIP using Vulkan0 backend        (twice: vision and audio, one copy)
+    re_mem_mmproj = re.compile(r"memory usage of mmproj is\s*([\d\.]+)\s*MiB")
+    re_clip_dev = re.compile(r"CLIP using (\S+) backend")
+
+    mem_model = 0.0
+    mem_context = 0.0
+    mem_mmproj = 0.0
+    mem_devices: Dict[str, Dict[str, float]] = {}
+
+    def _mem_add(device, field, value):
+        slot = mem_devices.setdefault(device, {"model": 0.0, "context": 0.0})
+        slot[field] += value
+
     # "[Perf] Total 36762.3 ms (2048 frames, 16.67 ms/frame AR, audio 163.84 s, RTF 0.224)"
     re_tts_done = re.compile(
         r"\[Perf\] Total\s+([\d\.]+)\s*ms\s*\((\d+)\s*frames.*?audio\s+([\d\.]+)\s*s,\s*RTF\s+([\d\.]+)\)"
@@ -363,6 +398,38 @@ def log_reader(proc, log_queue):
                                 state.stats.get("decision_count", 0) + 1
                             )
                         dec_started = None
+                except Exception:
+                    pass
+
+                try:
+                    mm = re_mem_model.search(decoded)
+                    if mm:
+                        mem_model += float(mm.group(2))
+                        _mem_add(mm.group(1), "model", float(mm.group(2)))
+
+                    km = re_mem_kv.search(decoded)
+                    if km:
+                        mem_context += float(km.group(2))
+                        _mem_add(km.group(1), "context", float(km.group(2)))
+
+                    pm_ = re_mem_mmproj.search(decoded)
+                    if pm_:
+                        mem_mmproj = float(pm_.group(1))
+                        mem_model += mem_mmproj
+
+                    # Charged once, when clip says where it put the tower.
+                    cd = re_clip_dev.search(decoded)
+                    if cd and mem_mmproj:
+                        _mem_add(cd.group(1), "model", mem_mmproj)
+                        mem_mmproj = 0.0
+
+                    if mm or km or pm_ or cd:
+                        with state.lock:
+                            state.stats["mem_model"] = mem_model
+                            state.stats["mem_context"] = mem_context
+                            state.stats["mem_devices"] = {
+                                dev: dict(vals) for dev, vals in mem_devices.items()
+                            }
                 except Exception:
                     pass
 
@@ -680,6 +747,14 @@ def _start_model_server(
 
     print(f"Starting model {model_key} on {state.host}:{port} with command: {cmd_str}")
 
+    # The memory panel reads llama.cpp's own buffer-size lines, and those are
+    # LLAMA_LOG_INFO, which maps to trace level -- invisible at the default 3. Set
+    # here rather than in the profiles: the panel depends on it, so it must not be
+    # something a profile can quietly drop. Other backends ignore the variable.
+    child_env = dict(os.environ)
+    if kind in ("llm", "decision"):
+        child_env["LLAMA_ARG_LOG_VERBOSITY"] = "4"
+
     with state.lock:
         _stop_process_unsafe()
 
@@ -690,6 +765,7 @@ def _start_model_server(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 preexec_fn=os.setsid,
+                env=child_env,
                 text=True,  # Treat as text (decodes automatically)
                 bufsize=1,  # Line buffered
                 errors="replace",  # Replace invalid characters instead of crashing

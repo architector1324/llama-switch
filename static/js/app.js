@@ -517,13 +517,18 @@ function updateStatusDisplay(status) {
 
     // Looking at a tab whose backend is not the running one: the numbers on screen
     // would belong to someone else, so blank them rather than leave them stale.
-    if (!status.running || status.kind !== activeSection) {
+    const showsRunningKind = status.running && status.kind === activeSection;
+    if (!showsRunningKind) {
         ['stat-gen-speed', 'stat-prompt-speed', 'stat-total-tokens', 'stat-ctx-usage',
          'stat-sd-speed', 'stat-sd-last', 'stat-sd-progress', 'stat-sd-images',
-         'stat-tts-rtf', 'stat-tts-last', 'stat-tts-frames', 'stat-tts-clips'].forEach(id => {
+         'stat-tts-rtf', 'stat-tts-last', 'stat-tts-frames', 'stat-tts-clips',
+         'stat-mem-model', 'stat-mem-context',
+         'stat-sd-mem-params', 'stat-sd-mem-compute'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.innerText = '-';
         });
+        // Not an innerText field: the row is built from scratch each time.
+        renderMemDevices(null);
     }
 
     if (status.running) {
@@ -533,8 +538,9 @@ function updateStatusDisplay(status) {
         modelText.innerText = status.model || 'Unknown';
 
         // Memory is reported by every llama.cpp-based backend, so it is filled
-        // before the per-kind branches rather than inside the llm one.
-        if (status.stats) {
+        // before the per-kind branches rather than inside the llm one. Guarded by
+        // the same rule as the rest: another tab must not show these numbers.
+        if (status.stats && showsRunningKind) {
             const memModelEl = document.getElementById('stat-mem-model');
             if (memModelEl) memModelEl.innerText = formatMiB(status.stats.mem_model);
 
@@ -648,20 +654,6 @@ function updateStatusDisplay(status) {
         
         const totalTokensEl = document.getElementById('stat-total-tokens');
         if(totalTokensEl) totalTokensEl.innerText = '-';
-
-        const memModelEl = document.getElementById('stat-mem-model');
-        if (memModelEl) memModelEl.innerText = '-';
-
-        const memCtxEl = document.getElementById('stat-mem-context');
-        if (memCtxEl) memCtxEl.innerText = '-';
-
-        const sdParamsEl = document.getElementById('stat-sd-mem-params');
-        if (sdParamsEl) sdParamsEl.innerText = '-';
-
-        const sdComputeEl = document.getElementById('stat-sd-mem-compute');
-        if (sdComputeEl) sdComputeEl.innerText = '-';
-
-        renderMemDevices(null);
 
         ['stat-sd-speed', 'stat-sd-last', 'stat-sd-progress', 'stat-sd-images',
          'stat-tts-rtf', 'stat-tts-last', 'stat-tts-frames', 'stat-tts-clips'].forEach(id => {

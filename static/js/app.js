@@ -327,9 +327,10 @@ function renderMemDevices(devices) {
     const groups = new Map();
     for (const [name, vals] of Object.entries(devices)) {
         const key = isHostDevice(name) ? 'RAM' : name;
-        const acc = groups.get(key) || { model: 0, context: 0 };
+        const acc = groups.get(key) || { model: 0, context: 0, compute: 0 };
         acc.model += vals.model || 0;
         acc.context += vals.context || 0;
+        acc.compute += vals.compute || 0;
         groups.set(key, acc);
     }
 
@@ -342,9 +343,13 @@ function renderMemDevices(devices) {
 
     row.innerHTML = names.map(name => {
         const g = groups.get(name);
-        const title = `model ${formatMiB(g.model)} \u00b7 context ${formatMiB(g.context)}`;
+        const parts = [];
+        if (g.model) parts.push(`model ${formatMiB(g.model)}`);
+        if (g.context) parts.push(`context ${formatMiB(g.context)}`);
+        if (g.compute) parts.push(`compute ${formatMiB(g.compute)}`);
+        const title = parts.join(' \u00b7 ');
         return `<div class="stat-box"><span class="label" title="${title}">${name}</span>` +
-               `<span class="value">${formatMiB(g.model + g.context)}</span></div>`;
+               `<span class="value">${formatMiB(g.model + g.context + g.compute)}</span></div>`;
     }).join('');
 }
 
@@ -527,6 +532,18 @@ function updateStatusDisplay(status) {
         statusText.style.color = 'var(--success)';
         modelText.innerText = status.model || 'Unknown';
 
+        // Memory is reported by every llama.cpp-based backend, so it is filled
+        // before the per-kind branches rather than inside the llm one.
+        if (status.stats) {
+            const memModelEl = document.getElementById('stat-mem-model');
+            if (memModelEl) memModelEl.innerText = formatMiB(status.stats.mem_model);
+
+            const memCtxEl = document.getElementById('stat-mem-context');
+            if (memCtxEl) memCtxEl.innerText = formatMiB(status.stats.mem_context);
+
+            renderMemDevices(status.stats.mem_devices);
+        }
+
         if (status.stats && status.kind === 'sd') {
             const s = status.stats;
 
@@ -545,6 +562,14 @@ function updateStatusDisplay(status) {
 
             const imgEl = document.getElementById('stat-sd-images');
             if (imgEl) imgEl.innerText = s.sd_images || 0;
+
+            const sdParamsEl = document.getElementById('stat-sd-mem-params');
+            if (sdParamsEl) sdParamsEl.innerText = formatMiB(s.mem_model);
+
+            // Only known once a graph has been built, so it stays '-' until the
+            // first image.
+            const sdComputeEl = document.getElementById('stat-sd-mem-compute');
+            if (sdComputeEl) sdComputeEl.innerText = formatMiB(s.mem_compute);
         } else if (status.stats && status.kind === 'tts') {
             const s = status.stats;
 
@@ -591,14 +616,6 @@ function updateStatusDisplay(status) {
 
             const totalTokensEl = document.getElementById('stat-total-tokens');
             if(totalTokensEl) totalTokensEl.innerText = status.stats.total_tokens || 0;
-
-            const memModelEl = document.getElementById('stat-mem-model');
-            if (memModelEl) memModelEl.innerText = formatMiB(status.stats.mem_model);
-
-            const memCtxEl = document.getElementById('stat-mem-context');
-            if (memCtxEl) memCtxEl.innerText = formatMiB(status.stats.mem_context);
-
-            renderMemDevices(status.stats.mem_devices);
         }
 
         // Decision models serve /v1/systemone and nothing else: clef has no web page
@@ -638,6 +655,12 @@ function updateStatusDisplay(status) {
         const memCtxEl = document.getElementById('stat-mem-context');
         if (memCtxEl) memCtxEl.innerText = '-';
 
+        const sdParamsEl = document.getElementById('stat-sd-mem-params');
+        if (sdParamsEl) sdParamsEl.innerText = '-';
+
+        const sdComputeEl = document.getElementById('stat-sd-mem-compute');
+        if (sdComputeEl) sdComputeEl.innerText = '-';
+
         renderMemDevices(null);
 
         ['stat-sd-speed', 'stat-sd-last', 'stat-sd-progress', 'stat-sd-images',
@@ -660,6 +683,8 @@ function applyDashboardKind(kind) {
     const isDecision = kind === 'decision';
     const notLlm = isSd || isTts || isMusic || isDecision;
     const llmStats = document.getElementById('stats-llm');
+    const memStats = document.getElementById('stats-mem');
+    const memDevices = document.getElementById('mem-devices-row');
     const sdStats = document.getElementById('stats-sd');
     const ttsStats = document.getElementById('stats-tts');
     const decStats = document.getElementById('stats-decision');
@@ -671,6 +696,8 @@ function applyDashboardKind(kind) {
     const preserveControl = document.getElementById('preserve-think-control');
 
     if (llmStats) llmStats.style.display = notLlm ? 'none' : '';
+    if (memStats) memStats.style.display = (notLlm && !isDecision) ? 'none' : '';
+    if (memDevices) memDevices.style.display = (isTts || isMusic) ? 'none' : '';
     if (sdStats) sdStats.style.display = isSd ? '' : 'none';
     if (ttsStats) ttsStats.style.display = isTts ? '' : 'none';
     if (decStats) decStats.style.display = isDecision ? '' : 'none';

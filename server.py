@@ -219,6 +219,7 @@ class ServiceState:
             # Parsed out of the backend's own load-time lines; zero until it loads.
             "mem_model": 0.0,
             "mem_context": 0.0,
+            "mem_compute": 0.0,
             "mem_devices": {},
             # sd_speed is seconds per step whichever unit sd.cpp printed.
             "sd_step": 0,
@@ -267,6 +268,7 @@ def _stop_process_unsafe():
             # Parsed out of the backend's own load-time lines; zero until it loads.
             "mem_model": 0.0,
             "mem_context": 0.0,
+            "mem_compute": 0.0,
             "mem_devices": {},
             "sd_step": 0,
             "sd_steps": 0,
@@ -363,14 +365,54 @@ def log_reader(proc, log_queue):
     re_mem_mmproj = re.compile(r"memory usage of mmproj is\s*([\d\.]+)\s*MiB")
     re_clip_dev = re.compile(r"CLIP using (\S+) backend")
 
+    # sd.cpp keeps its own books. The fit plan says which card each component
+    # landed on, and a separate line gives what each one really weighed -- the plan
+    # is only an estimate (it budgeted 319 MiB for a VAE that came out 160).
+    #   backend_fit.cpp - DiT params 6272 MiB, compute reserve 2048 MiB -> compute Vulkan1, params Vulkan1
+    re_sd_fit = re.compile(
+        r"(\S+)\s+params\s+[\d\.]+\s*MiB,\s*compute reserve.*?params (\S+)"
+    )
+
+    #   diffusion_engine.cpp - total params memory size = 10509.14MB (VRAM 10509.14MB, RAM 0.00MB):
+    #       text_encoders 4076.43MB(VRAM), diffusion_model 6272.71MB(VRAM), vae 160.00MB(VRAM), ...
+    re_sd_params = re.compile(r"total params memory size\s*=\s*([\d\.]+)MB")
+    re_sd_part = re.compile(r"(\w+) ([\d\.]+)MB\((?:VRAM|RAM)\)")
+
+    # Each component reports its own peak and re-reports it as it grows, so the
+    # figure is kept per component and summed per device -- replacing by device
+    # alone let the vae overwrite the text encoder.
+    #   ggml_runner.cpp - z_image compute buffer size: 690.12 MB(VRAM) on Vulkan1 (peak across 1 segment)
+    re_sd_compute = re.compile(
+        r"(\S+) compute buffer size:\s*([\d\.]+)\s*MB\((?:VRAM|RAM)\) on (\S+)"
+    )
+
+    # The fit plan and the weight report name the same parts differently.
+    SD_PART_DEVICE_KEY = {
+        "text_encoders": "Conditioner",
+        "diffusion_model": "DiT",
+        "vae": "VAE",
+        "controlnet": "ControlNet",
+        "extensions": "PhotoMaker",
+    }
+
     mem_model = 0.0
     mem_context = 0.0
     mem_mmproj = 0.0
     mem_devices: Dict[str, Dict[str, float]] = {}
+    sd_component_device: Dict[str, str] = {}
+    sd_compute: Dict[Tuple[str, str], float] = {}
 
     def _mem_add(device, field, value):
-        slot = mem_devices.setdefault(device, {"model": 0.0, "context": 0.0})
+        slot = mem_devices.setdefault(
+            device, {"model": 0.0, "context": 0.0, "compute": 0.0}
+        )
         slot[field] += value
+
+    def _mem_set(device, field, value):
+        slot = mem_devices.setdefault(
+            device, {"model": 0.0, "context": 0.0, "compute": 0.0}
+        )
+        slot[field] = value
 
     # "[Perf] Total 36762.3 ms (2048 frames, 16.67 ms/frame AR, audio 163.84 s, RTF 0.224)"
     re_tts_done = re.compile(
@@ -442,10 +484,39 @@ def log_reader(proc, log_queue):
                         _mem_add(cd.group(1), "model", mem_mmproj)
                         mem_mmproj = 0.0
 
-                    if mm or km or pm_ or cd:
+                    # --- sd-server keeps its own books ---
+
+                    fit = re_sd_fit.search(decoded)
+                    if fit and "compute reserve" in decoded:
+                        sd_component_device[fit.group(1)] = fit.group(2)
+
+                    sp = re_sd_params.search(decoded)
+                    if sp:
+                        mem_model = float(sp.group(1))
+                        for part, size in re_sd_part.findall(decoded):
+                            dev = sd_component_device.get(
+                                SD_PART_DEVICE_KEY.get(part, part)
+                            )
+                            if dev:
+                                _mem_add(dev, "model", float(size))
+
+                    sc = re_sd_compute.search(decoded)
+                    if sc:
+                        sd_compute[(sc.group(1), sc.group(3))] = float(sc.group(2))
+                        for dev in {d for _, d in sd_compute}:
+                            _mem_set(
+                                dev,
+                                "compute",
+                                sum(v for (_, d), v in sd_compute.items() if d == dev),
+                            )
+
+                    if mm or km or pm_ or cd or sp or sc:
                         with state.lock:
                             state.stats["mem_model"] = mem_model
                             state.stats["mem_context"] = mem_context
+                            state.stats["mem_compute"] = sum(
+                                v.get("compute", 0.0) for v in mem_devices.values()
+                            )
                             state.stats["mem_devices"] = {
                                 dev: dict(vals) for dev, vals in mem_devices.items()
                             }

@@ -519,7 +519,11 @@ def slots_poller(proc, port):
     url = f"http://127.0.0.1:{port}/slots"
     prev_t = prev_dec = prev_pp = None
     prev_busy = False
-    client = httpx.Client(timeout=1.0)
+    # trust_env=False: the backend is our own child on loopback, so a proxy in the
+    # environment must never be consulted. With http_proxy set and no_proxy unset
+    # -- which is what the service inherits -- every hop went to privoxy and came
+    # back 502.
+    client = httpx.Client(timeout=1.0, trust_env=False)
     while proc.poll() is None:
         time.sleep(1.0)
         try:
@@ -1021,7 +1025,7 @@ async def proxy_to_llama(request: Request):
     }
 
     try:
-        client = httpx.AsyncClient()
+        client = httpx.AsyncClient(trust_env=False)  # loopback, never via a proxy
         req = client.build_request(
             method=request.method,
             url=target_url,
@@ -1157,7 +1161,7 @@ async def _proxy_to_current(
     }
 
     try:
-        client = httpx.AsyncClient()
+        client = httpx.AsyncClient(trust_env=False)  # loopback, never via a proxy
         req = client.build_request(
             method=request.method,
             url=target_url,

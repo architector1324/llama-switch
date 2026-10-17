@@ -55,6 +55,25 @@ def find_free_port():
 # --- Config Manager ---
 SECTIONS = ("llm", "sd", "tts", "music", "decision")
 
+# What a kind can do and where it is served. Published in /v1/models so a client
+# can tell the sections apart, the way ollama's "capabilities" is used; the list
+# is served whole, like every other provider serves it.
+KIND_CAPABILITIES = {
+    "llm": ["completion", "chat"],
+    "sd": ["image"],
+    "tts": ["audio", "speech"],
+    "music": ["audio", "music"],
+    "decision": ["completion"],
+}
+
+KIND_ENDPOINT = {
+    "llm": "/v1/chat/completions",
+    "sd": "/v1/images/generations",
+    "tts": "/v1/audio/speech",
+    "music": "/v1/audio/speech",
+    "decision": "/v1/systemone",
+}
+
 
 class ConfigManager:
     def __init__(
@@ -606,10 +625,12 @@ def _default_quant(model_conf: Dict) -> Optional[str]:
     return next(iter(model_conf), None)
 
 
-def _resolve_model(requested_model: str, kind: str) -> Tuple[str, Optional[str]]:
-    """Model id to (model_key, quant); a bare id means the first-listed quant."""
+def _lookup_model(
+    requested_model: str, kind: str
+) -> Optional[Tuple[str, Optional[str]]]:
+    """Model id to (model_key, quant) within one section, or None."""
     if not state.config_mgr:
-        raise HTTPException(status_code=500, detail="Config not initialized")
+        return None
 
     models_data = state.config_mgr.get_models(kind)
 
@@ -626,6 +647,31 @@ def _resolve_model(requested_model: str, kind: str) -> Tuple[str, Optional[str]]
                 continue  # Already covered by the bare model id above
             if requested_model == f"{model_key}-{quant_key}":
                 return model_key, quant_key
+
+    return None
+
+
+def _resolve_model(requested_model: str, kind: str) -> Tuple[str, Optional[str]]:
+    """Model id to (model_key, quant); a bare id means the first-listed quant."""
+    if not state.config_mgr:
+        raise HTTPException(status_code=500, detail="Config not initialized")
+
+    found = _lookup_model(requested_model, kind)
+    if found:
+        return found
+
+    # The list is served whole, so a chat client can offer an image model and the
+    # user can pick it. Calling that "not found" when it plainly is in the list
+    # would be a lie; name the endpoint that does serve it.
+    for other in SECTIONS:
+        if other != kind and _lookup_model(requested_model, other):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Model {requested_model} is a '{other}' model, not '{kind}'; "
+                    f"it is served at {KIND_ENDPOINT.get(other, '?')}"
+                ),
+            )
 
     raise HTTPException(status_code=404, detail=f"Model {requested_model} not found")
 
@@ -851,8 +897,10 @@ def get_v1_models():
     if not state.config_mgr:
         return {"object": "list", "data": [], "models": []}
 
-    # Text models only, or chat clients would offer sd-server as a chat model.
-    models_data = state.config_mgr.get_models("llm")
+    # Every section, the way other providers serve it: openai mixes dall-e and
+    # whisper into the same list, ollama and lm studio tag each entry instead of
+    # splitting the endpoint. The tag here is "type" plus "capabilities".
+    models_data = state.config_mgr.get_models()
 
     # The window the next llm load will actually get — same expression the load path uses.
     effective_ctx = state.selected_ctx or state.default_ctx
@@ -860,6 +908,7 @@ def get_v1_models():
     model_list_custom = []
 
     for model_key, model_info in models_data.items():
+        kind = state.config_mgr.get_kind(model_key) or "llm"
         if "cmd" in model_info:
             quants = {None: model_info["cmd"]}
         else:
@@ -874,7 +923,7 @@ def get_v1_models():
             else:
                 openai_id = f"{model_key}-{quant_key}"
 
-            capabilities = ["completion", "chat"]
+            capabilities = list(KIND_CAPABILITIES.get(kind, ["completion"]))
             if "mmproj" in cmd_str:
                 capabilities.append("multimodal")
 
@@ -884,11 +933,15 @@ def get_v1_models():
                     "object": "model",
                     "created": 1677619200,
                     "owned_by": "llamacpp",
+                    # Not part of the openai schema; lm studio does the same in its
+                    # own listing, and a client that ignores it loses nothing.
+                    "type": kind,
                     "meta": {
                         "vocab_type": 1,
                         "n_vocab": 32000,  # Dummy
-                        "n_ctx": effective_ctx,
-                        "n_ctx_train": effective_ctx,
+                        # A context window is an llm notion: sd and tts have none.
+                        "n_ctx": effective_ctx if kind in ("llm", "decision") else 0,
+                        "n_ctx_train": effective_ctx if kind in ("llm", "decision") else 0,
                         "n_embd": 4096,  # Dummy
                         "n_params": 7000000000,  # Dummy
                         "size": 4000000000,  # Dummy
@@ -901,6 +954,7 @@ def get_v1_models():
                     "name": openai_id,
                     "model": openai_id,
                     "type": "model",
+                    "kind": kind,
                     "modified_at": "",
                     "size": "",
                     "digest": "",
@@ -909,7 +963,7 @@ def get_v1_models():
                     "details": {
                         "parent_model": model_key,
                         "format": "gguf",
-                        "family": "",
+                        "family": kind,
                         "families": [],
                         "parameter_size": "",
                         "quantization_level": quant_key or "",

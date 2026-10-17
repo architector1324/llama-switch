@@ -65,19 +65,6 @@
                                     </div>
                                 </div>
                             </div>
-                            <div id="stats-mem">
-                                <div class="stat-row">
-                                    <div class="stat-box">
-                                        <span class="label" title="Weights held in memory: the model itself plus any vision tower and draft model, across every device.">Model Memory</span>
-                                        <span class="value" id="stat-mem-model">-</span>
-                                    </div>
-                                    <div class="stat-box">
-                                        <span class="label" title="KV cache for the whole context window, all slots included.">Context Memory</span>
-                                        <span class="value" id="stat-mem-context">-</span>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="stat-row" id="mem-devices-row"></div>
                             <div id="stats-sd" style="display: none;">
                                 <div class="stat-row">
                                     <div class="stat-box">
@@ -149,6 +136,19 @@
                                     </div>
                                 </div>
                             </div>
+                            <div id="stats-mem">
+                                <div class="stat-row">
+                                    <div class="stat-box">
+                                        <span class="label" title="Weights held in memory: the model itself plus any vision tower and draft model, across every device.">Model Memory</span>
+                                        <span class="value" id="stat-mem-model">-</span>
+                                    </div>
+                                    <div class="stat-box">
+                                        <span class="label" title="KV cache for the whole context window, all slots included.">Context Memory</span>
+                                        <span class="value" id="stat-mem-context">-</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="stat-row" id="mem-devices-row"></div>
                         </div>
 
                         <div class="dash-column settings-column">
@@ -255,6 +255,6 @@
             </section>
         </main>
     </div>
-    <script src="/static/js/app.js?v=23"></script>
+    <script src="/static/js/app.js?v=24"></script>
 </body>
 </html>

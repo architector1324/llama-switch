@@ -160,6 +160,7 @@ class ServiceState:
         self.current_model: Optional[str] = None
         self.current_quant: Optional[str] = None
         self.current_ctx: int = 0
+        self.current_parallel: int = 0
         self.current_frames: int = 0
         self.current_res: str = ""
         self.current_hires: bool = False
@@ -171,6 +172,11 @@ class ServiceState:
         # Whether the next llm load pulls previous reasoning back into the prompt.
         # Sticky like selected_ctx: a stop or an sd load must not reset the choice.
         self.selected_preserve_think: bool = False
+        # Server slots: how many clients may talk to one model at once. Sticky like
+        # selected_ctx. The context window is per slot, so N slots ask the engine for
+        # N times as much KV -- more slots cost memory, not context.
+        self.default_parallel: int = 1
+        self.selected_parallel: int = 0
         # Frame cap for tts, apart from ctx: 2048 frames at 12.5/s is about 164 s.
         self.default_frames: int = 2048
         self.selected_frames: int = 0
@@ -225,6 +231,7 @@ def _stop_process_unsafe():
         state.process = None
         state.current_model = None
         state.current_quant = None
+        state.current_parallel = 0
         state.current_port = 0
         state.current_kind = None
         state.ready = False
@@ -460,7 +467,9 @@ def slots_poller(proc, port):
 
         # Context fill, live. The log only says it once the request is released, and
         # n_ctx is what the engine actually ended up with rather than what we asked for.
-        ctx_used = sum(sl.get("n_prompt_tokens") or 0 for sl in slots)
+        # The fullest slot, not the sum: every slot has its own window of this size,
+        # so the gauge reads against one of them. Identical while there is one slot.
+        ctx_used = max((sl.get("n_prompt_tokens") or 0) for sl in slots)
         ctx_limit = max((sl.get("n_ctx") or 0) for sl in slots)
         with state.lock:
             if ctx_used:
@@ -515,6 +524,7 @@ class StartRequest(BaseModel):
     res: Optional[str] = None
     hires: Optional[bool] = None
     preserve_think: Optional[bool] = None
+    parallel: Optional[int] = None
 
 
 # --- Internal Start Logic ---
@@ -576,6 +586,7 @@ def _start_model_server(
     res: Optional[str] = None,
     hires: Optional[bool] = None,
     preserve_think: Optional[bool] = None,
+    parallel: Optional[int] = None,
 ) -> Dict:
     if not state.config_mgr:
         raise RuntimeError("Config not initialized")
@@ -630,10 +641,25 @@ def _start_model_server(
         "--reasoning-preserve" if preserve_think else "--no-reasoning-preserve"
     )
 
+    # Same precedence as ctx. Goes straight onto a shell command line, so it has to
+    # end up an int.
+    if parallel is None:
+        parallel = state.selected_parallel or state.default_parallel
+    try:
+        parallel = int(parallel)
+    except (TypeError, ValueError):
+        raise ValueError(f"Parallel slots must be a number, got {parallel!r}")
+    if not 1 <= parallel <= 64:
+        raise ValueError(f"Parallel slots must be 1..64, got {parallel}")
+
+    # -c is the whole KV pool and llama.cpp hands each slot an equal share of it, so
+    # the window the user asked for is per slot and the pool has to be N times it.
+    ctx_total = ctx * parallel
+
     port = find_free_port()
 
     cmd_str = cmd_template.replace("${PORT}", str(port))
-    cmd_str = cmd_str.replace("${CTX}", str(ctx))
+    cmd_str = cmd_str.replace("${CTX}", str(ctx_total))
     cmd_str = cmd_str.replace("${FRAMES}", str(frames))
     cmd_str = RE_HIRES.sub((lambda m: m.group(1)) if hires else "", cmd_str)
     cmd_str = cmd_str.replace("${HIRES}", "--hires" if hires else "")
@@ -641,14 +667,16 @@ def _start_model_server(
     cmd_str = cmd_str.replace("${HEIGHT}", height)
     cmd_str = cmd_str.replace("${HOST}", state.host)
     cmd_str = cmd_str.replace("${PRESERVE_THINK}", preserve_flag)
+    cmd_str = cmd_str.replace("${PARALLEL}", str(parallel))
     # Bare forms, for configs written without the braces.
     cmd_str = cmd_str.replace("$PORT", str(port))
-    cmd_str = cmd_str.replace("$CTX", str(ctx))
+    cmd_str = cmd_str.replace("$CTX", str(ctx_total))
     cmd_str = cmd_str.replace("$FRAMES", str(frames))
     cmd_str = cmd_str.replace("$WIDTH", width)
     cmd_str = cmd_str.replace("$HEIGHT", height)
     cmd_str = cmd_str.replace("$HOST", state.host)
     cmd_str = cmd_str.replace("$PRESERVE_THINK", preserve_flag)
+    cmd_str = cmd_str.replace("$PARALLEL", str(parallel))
 
     print(f"Starting model {model_key} on {state.host}:{port} with command: {cmd_str}")
 
@@ -672,9 +700,12 @@ def _start_model_server(
             # Decision models do take -c, so they report it too; only the sticky
             # selected_ctx stays an llm notion.
             state.current_ctx = ctx if kind in ("llm", "decision") else 0
+            # Only llama-server takes --parallel; sd and tts have no slots.
+            state.current_parallel = parallel if kind in ("llm", "decision") else 0
             if kind == "llm":
                 state.selected_ctx = ctx
                 state.selected_preserve_think = preserve_think
+                state.selected_parallel = parallel
             state.current_frames = frames if kind == "tts" else 0
             if kind == "tts":
                 state.selected_frames = frames
@@ -714,6 +745,7 @@ def get_config():
             "sections": {name: {} for name in SECTIONS},
             "kinds": {},
             "default_ctx": state.default_ctx,
+            "default_parallel": state.default_parallel,
             "default_frames": state.default_frames,
             "default_res": state.default_res,
         }
@@ -727,6 +759,7 @@ def get_config():
         },
         "kinds": {key: state.config_mgr.get_kind(key) for key in models},
         "default_ctx": state.default_ctx,
+        "default_parallel": state.default_parallel,
         "default_frames": state.default_frames,
         "default_res": state.default_res,
     }
@@ -819,6 +852,8 @@ def get_status():
             "kind": state.current_kind,
             "ctx": state.current_ctx,
             "selected_ctx": state.selected_ctx or state.default_ctx,
+            "parallel": state.current_parallel,
+            "selected_parallel": state.selected_parallel or state.default_parallel,
             "selected_preserve_think": state.selected_preserve_think,
             "frames": state.current_frames,
             "selected_frames": state.selected_frames or state.default_frames,
@@ -863,6 +898,7 @@ def start_server(req: StartRequest):
             req.res,
             req.hires,
             req.preserve_think,
+            req.parallel,
         )
         return {"status": "started", **updated_data}
     except ValueError as e:
@@ -1331,6 +1367,13 @@ if __name__ == "__main__":
         help="Default Context Window (default: 4096)",
     )
     parser.add_argument(
+        "-np",
+        "--parallel",
+        type=int,
+        default=1,
+        help="Default server slots per model (default: 1)",
+    )
+    parser.add_argument(
         "-f", "--config", type=str, default="config.yaml", help="Config file path"
     )
     parser.add_argument(
@@ -1340,6 +1383,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     state.default_ctx = args.ctx
+    state.default_parallel = args.parallel
     state.host = args.host
 
     state.config_mgr = ConfigManager(

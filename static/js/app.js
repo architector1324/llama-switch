@@ -25,7 +25,20 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
     // Once typed into, status polls stop overwriting the field.
-    ctxInput.addEventListener('input', () => { ctxInputPristine = false; });
+    ctxInput.addEventListener('input', () => { ctxInputPristine = false; renderParallelHint(); });
+
+    const parallelInput = document.getElementById('parallel-input');
+    if (parallelInput) {
+        parallelInput.addEventListener('keypress', function (e) {
+            if (e.key === 'Enter') {
+                applyParallelChange();
+            }
+        });
+        parallelInput.addEventListener('input', () => {
+            parallelInputPristine = false;
+            renderParallelHint();
+        });
+    }
 
     const framesInput = document.getElementById('frames-input');
     framesInput.addEventListener('keypress', function (e) {
@@ -62,6 +75,7 @@ let lastStatus = null;
 let currentLoadingModel = null;
 let ctxInputPristine = true; // Field still mirrors the server, untouched
 let framesInputPristine = true;
+let parallelInputPristine = true;
 let preserveInputPristine = true;
 
 async function fetchConfig() {
@@ -72,6 +86,10 @@ async function fetchConfig() {
         // The server's default context window is the source of truth.
         if (data.default_ctx) {
             document.getElementById('ctx-input').value = data.default_ctx;
+        }
+        if (data.default_parallel) {
+            const parallelInput = document.getElementById('parallel-input');
+            if (parallelInput) parallelInput.value = data.default_parallel;
         }
         if (data.default_frames) {
             document.getElementById('frames-input').value = data.default_frames;
@@ -213,6 +231,9 @@ function handleQuantChange(key) {
 async function loadModel(key, quantization = null) {
     const ctxInput = document.getElementById('ctx-input');
     const ctx = parseInt(ctxInput.value) || 4096;
+    // Slots share that one context window, so the server needs both together.
+    const parallelInput = document.getElementById('parallel-input');
+    const parallel = parseInt(parallelInput ? parallelInput.value : '1') || 1;
     // Frames is tts-only: an llm-sized ctx makes no sense as a frame cap.
     const framesInput = document.getElementById('frames-input');
     const frames = parseInt(framesInput.value) || 2048;
@@ -236,7 +257,7 @@ async function loadModel(key, quantization = null) {
         const res = await fetch('/api/start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model_key: key, quantization: quantization, ctx: ctx, frames: frames, res: outputRes, hires: hires, preserve_think: preserveThink })
+            body: JSON.stringify({ model_key: key, quantization: quantization, ctx: ctx, parallel: parallel, frames: frames, res: outputRes, hires: hires, preserve_think: preserveThink })
         });
         
         if (!res.ok) {
@@ -283,6 +304,25 @@ async function applyPreserveThinkChange() {
     // The flag is baked into the command line, so the model has to come back up.
     if (!lastStatus || !lastStatus.running || !lastStatus.model) {
         return; // Nothing loaded: the checkbox just waits for the next start
+    }
+    loadModel(lastStatus.model, lastStatus.quantization);
+}
+
+// The context window is per slot, so the KV the engine is asked for is that times
+// the slot count. Spell the total out: it is what the memory bill follows.
+function renderParallelHint() {
+    const hint = document.getElementById('parallel-hint');
+    if (!hint) return;
+    const parallelInput = document.getElementById('parallel-input');
+    const ctxInput = document.getElementById('ctx-input');
+    const n = parseInt(parallelInput ? parallelInput.value : '1') || 1;
+    const ctx = parseInt(ctxInput ? ctxInput.value : '0') || 0;
+    hint.textContent = (n > 1 && ctx) ? `${n} \u00d7 ${ctx} = ${n * ctx} ctx total` : '';
+}
+
+async function applyParallelChange() {
+    if (!lastStatus || !lastStatus.running || !lastStatus.model) {
+        return; // Nothing loaded: the number just waits for the next start
     }
     loadModel(lastStatus.model, lastStatus.quantization);
 }
@@ -377,6 +417,14 @@ function updateStatusDisplay(status) {
             ctxInput.value = status.selected_ctx;
         }
     }
+
+    if (parallelInputPristine && status.selected_parallel) {
+        const parallelInput = document.getElementById('parallel-input');
+        if (parallelInput && document.activeElement !== parallelInput) {
+            parallelInput.value = status.selected_parallel;
+        }
+    }
+    renderParallelHint();
 
     // Mirror the server's remembered choice, except while a load is in flight:
     // status still carries the old value until the new process is up.
@@ -557,6 +605,7 @@ function applyDashboardKind(kind) {
     const framesControl = document.getElementById('frames-control');
     const resControl = document.getElementById('res-control');
     const hiresControl = document.getElementById('hires-control');
+    const parallelControl = document.getElementById('parallel-control');
     const preserveControl = document.getElementById('preserve-think-control');
 
     if (llmStats) llmStats.style.display = notLlm ? 'none' : '';
@@ -564,6 +613,7 @@ function applyDashboardKind(kind) {
     if (ttsStats) ttsStats.style.display = isTts ? '' : 'none';
     if (decStats) decStats.style.display = isDecision ? '' : 'none';
     if (ctxControl) ctxControl.style.display = (notLlm && !isDecision) ? 'none' : '';
+    if (parallelControl) parallelControl.style.display = (notLlm && !isDecision) ? 'none' : '';
     if (framesControl) framesControl.style.display = isTts ? '' : 'none';
     if (resControl) resControl.style.display = isSd ? '' : 'none';
     if (hiresControl) hiresControl.style.display = isSd ? '' : 'none';

@@ -29,9 +29,9 @@ from starlette.background import BackgroundTask
 async def lifespan(app: FastAPI):
     yield
     print("\n[Service] Shutting down... cleaning up processes")
-    if "state" in globals() and state.process:  # type: ignore
+    if "state" in globals():  # type: ignore
         with state.lock:
-            _stop_process_unsafe()
+            _stop_all_unsafe()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -243,18 +243,92 @@ class ConfigManager:
 
 
 # --- Global State ---
+def _new_stats() -> Dict:
+    """Counters for one backend process. Per instance, never shared."""
+    return {
+        "ctx_used": 0,  # From 'stop processing: n_tokens = X'
+        "ctx_limit": 0,
+        "total_tokens": 0,  # Accumulated generation
+        "prompt_speed": 0.0,
+        "gen_speed": 0.0,
+        # Parsed out of the backend's own load-time lines; zero until it loads.
+        "mem_model": 0.0,
+        "mem_context": 0.0,
+        "mem_compute": 0.0,
+        "mem_devices": {},
+        # sd_speed is seconds per step whichever unit sd.cpp printed.
+        "sd_step": 0,
+        "sd_steps": 0,
+        "sd_speed": 0.0,
+        "sd_last_time": 0.0,
+        "sd_images": 0,
+        "sd_size": "",
+        "tts_frames": 0,
+        "tts_rtf": 0.0,
+        "tts_audio": 0.0,
+        "tts_last_time": 0.0,
+        "tts_clips": 0,
+    }
+
+
+class Instance:
+    """One launched backend: its process, its port, its counters, its log.
+
+    Everything here used to live on ServiceState as current_*, which is why only
+    one model could run. Keeping it per instance is what lets an image model and
+    a language model be up at the same time.
+    """
+
+    def __init__(self, model_key: str, quant: Optional[str], kind: str, port: int):
+        self.model_key = model_key
+        self.quant = quant
+        self.kind = kind
+        self.port = port
+        self.process: Optional[subprocess.Popen] = None
+        self.ready = False
+        self.ctx = 0
+        self.parallel = 0
+        self.devices = ""
+        self.frames = 0
+        self.res = ""
+        self.hires = False
+        self.stats = _new_stats()
+        self.logs = deque(maxlen=2000)
+
+    @property
+    def label(self) -> str:
+        return f"{self.model_key}:{self.quant}" if self.quant else self.model_key
+
+    def alive(self) -> bool:
+        return self.process is not None and self.process.poll() is None
+
+    def to_dict(self) -> Dict:
+        return {
+            "model": self.model_key,
+            "quantization": self.quant,
+            "kind": self.kind,
+            "label": self.label,
+            "port": self.port if self.alive() else None,
+            "pid": self.process.pid if self.alive() else None,
+            "running": self.alive(),
+            "ready": self.ready,
+            "ctx": self.ctx,
+            "parallel": self.parallel,
+            "devices": self.devices,
+            "frames": self.frames,
+            "res": self.res,
+            "hires": self.hires,
+            "stats": self.stats,
+        }
+
+
 class ServiceState:
     def __init__(self):
-        self.process: Optional[subprocess.Popen] = None
-        self.current_model: Optional[str] = None
-        self.current_quant: Optional[str] = None
-        self.current_ctx: int = 0
-        self.current_parallel: int = 0
-        self.current_frames: int = 0
-        self.current_res: str = ""
-        self.current_hires: bool = False
-        self.current_port: int = 0
-        self.current_kind: Optional[str] = None
+        # Every running backend, keyed by model. One entry per model, so loading
+        # the same model again replaces it rather than doubling it.
+        self.instances: Dict[str, Instance] = {}
+        # Off keeps the old behaviour: starting anything stops everything else.
+        self.multi: bool = False
         self.default_ctx: int = 4096
         # Survives sd loads and stops, so a round trip keeps the user's choice.
         self.selected_ctx: int = 0
@@ -271,7 +345,6 @@ class ServiceState:
         # Sticky per kind, like selected_res is to sd: a card picked for a
         # language model says nothing about where an image model should go.
         self.selected_devices: Dict[str, str] = {}
-        self.current_devices: str = ""
         # Frame cap for tts, apart from ctx: 2048 frames at 12.5/s is about 164 s.
         self.default_frames: int = 2048
         self.selected_frames: int = 0
@@ -282,93 +355,63 @@ class ServiceState:
         # Second sd pass. Sticky like selected_res.
         self.selected_hires: bool = False
         self.host: str = "0.0.0.0"
-        self.ready: bool = False
-        # One buffer per launched process, not one for the service. A backend
-        # prints its memory breakdown as it dies, and those lines sitting above a
-        # fresh model's output read as that model's -- which fooled both of us.
-        self.logs = deque(maxlen=2000)
-        # What the current buffer belongs to, so the panel can say whose log it is
-        # and hide it on a section the log has nothing to do with.
-        self.logs_model: Optional[str] = None
-        self.logs_kind: Optional[str] = None
         self.lock = threading.Lock()
         self.config_mgr: Optional[ConfigManager] = None
-        self.stats = {
-            "ctx_used": 0,  # From 'stop processing: n_tokens = X'
-            "ctx_limit": 0,
-            "total_tokens": 0,  # Accumulated generation
-            "prompt_speed": 0.0,
-            "gen_speed": 0.0,
-            # Parsed out of the backend's own load-time lines; zero until it loads.
-            "mem_model": 0.0,
-            "mem_context": 0.0,
-            "mem_compute": 0.0,
-            "mem_devices": {},
-            # sd_speed is seconds per step whichever unit sd.cpp printed.
-            "sd_step": 0,
-            "sd_steps": 0,
-            "sd_speed": 0.0,
-            "sd_last_time": 0.0,
-            "sd_images": 0,
-            "sd_size": "",
-            "tts_frames": 0,
-            "tts_rtf": 0.0,
-            "tts_audio": 0.0,
-            "tts_last_time": 0.0,
-            "tts_clips": 0,
-        }
+
+    def instance_for_model(self, model_key: str) -> Optional[Instance]:
+        return self.instances.get(model_key)
+
+    def instances_of_kind(self, kind: str) -> List[Instance]:
+        return [i for i in self.instances.values() if i.kind == kind]
 
 
 state = ServiceState()
 
 
 # --- Unsafe Process Control ---
-def _stop_process_unsafe():
-    if state.process:
-        print("[Service] Stopping current process...")
-        if state.process.poll() is None:
+def _terminate(proc: subprocess.Popen) -> None:
+    """Kill the whole process group: profiles are shell lines that fork."""
+    if proc.poll() is None:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
             try:
-                os.killpg(os.getpgid(state.process.pid), signal.SIGTERM)
-                try:
-                    state.process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    os.killpg(os.getpgid(state.process.pid), signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        state.process = None
-        state.current_model = None
-        state.current_quant = None
-        state.current_parallel = 0
-        state.current_devices = ""
-        state.current_port = 0
-        state.current_kind = None
-        state.ready = False
-        state.stats = {
-            "ctx_used": 0,
-            "ctx_limit": 0,
-            "total_tokens": 0,
-            "prompt_speed": 0.0,
-            "gen_speed": 0.0,
-            # Parsed out of the backend's own load-time lines; zero until it loads.
-            "mem_model": 0.0,
-            "mem_context": 0.0,
-            "mem_compute": 0.0,
-            "mem_devices": {},
-            "sd_step": 0,
-            "sd_steps": 0,
-            "sd_speed": 0.0,
-            "sd_last_time": 0.0,
-            "sd_images": 0,
-            "sd_size": "",
-        }
-        print("[Service] Process stopped.")
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
+def _stop_instance_unsafe(model_key: str) -> bool:
+    """Stop one instance. Caller holds state.lock."""
+    inst = state.instances.pop(model_key, None)
+    if not inst:
+        return False
+    print(f"[Service] Stopping {inst.label}...")
+    if inst.process:
+        _terminate(inst.process)
+    inst.ready = False
+    print(f"[Service] {inst.label} stopped.")
+    return True
+
+
+def _stop_all_unsafe() -> int:
+    """Stop every instance. Caller holds state.lock."""
+    stopped = 0
+    for model_key in list(state.instances):
+        stopped += 1 if _stop_instance_unsafe(model_key) else 0
+    return stopped
 
 
 def on_config_change():
-    """Stop the running model when the config changes."""
+    """Stop running models when the config changes.
+
+    A profile that was edited no longer describes the process that is up, and
+    the command line cannot be changed under a running backend.
+    """
     print("[Service] Config change detected. Stopping any running model...")
     with state.lock:
-        _stop_process_unsafe()
+        _stop_all_unsafe()
 
 
 # --- Log Reader ---
@@ -394,7 +437,7 @@ def _iter_output_chunks(proc):
         yield _ANSI_RE.sub("", buf).rstrip()
 
 
-def log_reader(proc, log_queue):
+def log_reader(proc, inst):
     # prompt eval time =       4.67 ms /    11 tokens (    0.42 ms per token,  2355.46 tokens per second)
     re_prompt = re.compile(
         r"prompt eval time\s*=\s*[\d\.]+\s*ms\s*/\s*\d+\s*tokens\s*\(\s*[\d\.]+\s*ms per token,\s*([\d\.]+)\s*tokens per second\)"
@@ -506,7 +549,7 @@ def log_reader(proc, log_queue):
     try:
         for decoded in _iter_output_chunks(proc):
             if decoded:
-                log_queue.append(decoded)
+                inst.logs.append(decoded)
 
                 # Substrings that survive llama.cpp log renames ("main:" -> "llama_server:").
                 if (
@@ -516,8 +559,8 @@ def log_reader(proc, log_queue):
                     or "server is listening" in decoded
                 ):
                     with state.lock:
-                        if not state.ready:
-                            state.ready = True
+                        if not inst.ready:
+                            inst.ready = True
 
                 try:
                     # M.SS.mmm.uuu since server start.
@@ -535,12 +578,12 @@ def log_reader(proc, log_queue):
                     dd = re_dec_done.search(decoded)
                     if dd and dec_started is not None:
                         with state.lock:
-                            state.stats["decision_ms"] = (
+                            inst.stats["decision_ms"] = (
                                 _log_seconds(dd) - dec_started
                             ) * 1000
-                            state.stats["decision_tokens"] = int(dd.group(5))
-                            state.stats["decision_count"] = (
-                                state.stats.get("decision_count", 0) + 1
+                            inst.stats["decision_tokens"] = int(dd.group(5))
+                            inst.stats["decision_count"] = (
+                                inst.stats.get("decision_count", 0) + 1
                             )
                         dec_started = None
                 except Exception:
@@ -596,12 +639,12 @@ def log_reader(proc, log_queue):
 
                     if mm or km or pm_ or cd or sp or sc:
                         with state.lock:
-                            state.stats["mem_model"] = mem_model
-                            state.stats["mem_context"] = mem_context
-                            state.stats["mem_compute"] = sum(
+                            inst.stats["mem_model"] = mem_model
+                            inst.stats["mem_context"] = mem_context
+                            inst.stats["mem_compute"] = sum(
                                 v.get("compute", 0.0) for v in mem_devices.values()
                             )
-                            state.stats["mem_devices"] = {
+                            inst.stats["mem_devices"] = {
                                 dev: dict(vals) for dev, vals in mem_devices.items()
                             }
                 except Exception:
@@ -612,23 +655,23 @@ def log_reader(proc, log_queue):
                     if pm:
                         val = float(pm.group(1))
                         with state.lock:
-                            state.stats["prompt_speed"] = val
+                            inst.stats["prompt_speed"] = val
 
                     em = re_eval.search(decoded)
                     if em:
                         tokens_count = int(em.group(1))
                         speed_val = float(em.group(2))
                         with state.lock:
-                            state.stats["gen_speed"] = speed_val
-                            state.stats["total_tokens"] += tokens_count
+                            inst.stats["gen_speed"] = speed_val
+                            inst.stats["total_tokens"] += tokens_count
 
                     rm = re_release.search(decoded)
                     if rm:
                         used = int(rm.group(1))
                         with state.lock:
-                            state.stats["ctx_used"] = used
-                            if state.current_ctx > 0:
-                                state.stats["ctx_limit"] = state.current_ctx
+                            inst.stats["ctx_used"] = used
+                            if inst.ctx > 0:
+                                inst.stats["ctx_limit"] = inst.ctx
 
                     # --- sd-server ---
 
@@ -641,40 +684,40 @@ def log_reader(proc, log_queue):
                             1.0 / value if value > 0 else 0.0
                         )
                         with state.lock:
-                            state.stats["sd_step"] = step
-                            state.stats["sd_steps"] = steps
-                            state.stats["sd_speed"] = round(sec_per_step, 2)
+                            inst.stats["sd_step"] = step
+                            inst.stats["sd_steps"] = steps
+                            inst.stats["sd_speed"] = round(sec_per_step, 2)
 
                     dm = re_sd_done.search(decoded)
                     if dm:
                         with state.lock:
-                            state.stats["sd_last_time"] = float(dm.group(1))
-                            state.stats["sd_images"] += 1
+                            inst.stats["sd_last_time"] = float(dm.group(1))
+                            inst.stats["sd_images"] += 1
                             # Park the bar at 100% rather than the last partial step.
-                            if state.stats["sd_steps"]:
-                                state.stats["sd_step"] = state.stats["sd_steps"]
+                            if inst.stats["sd_steps"]:
+                                inst.stats["sd_step"] = inst.stats["sd_steps"]
 
                     zm = re_sd_size.search(decoded)
                     if zm:
                         with state.lock:
-                            state.stats["sd_size"] = f"{zm.group(1)}x{zm.group(2)}"
-                            state.stats["sd_step"] = 0
+                            inst.stats["sd_size"] = f"{zm.group(1)}x{zm.group(2)}"
+                            inst.stats["sd_step"] = 0
 
                     # --- tts-server ---
 
                     tm = re_tts_step.search(decoded)
                     if tm:
                         with state.lock:
-                            state.stats["tts_frames"] = int(tm.group(1))
+                            inst.stats["tts_frames"] = int(tm.group(1))
 
                     td = re_tts_done.search(decoded)
                     if td:
                         with state.lock:
-                            state.stats["tts_last_time"] = float(td.group(1)) / 1000.0
-                            state.stats["tts_frames"] = int(td.group(2))
-                            state.stats["tts_audio"] = float(td.group(3))
-                            state.stats["tts_rtf"] = float(td.group(4))
-                            state.stats["tts_clips"] += 1
+                            inst.stats["tts_last_time"] = float(td.group(1)) / 1000.0
+                            inst.stats["tts_frames"] = int(td.group(2))
+                            inst.stats["tts_audio"] = float(td.group(3))
+                            inst.stats["tts_rtf"] = float(td.group(4))
+                            inst.stats["tts_clips"] += 1
                 except Exception as e:
                     print(f"[Service] Log parsing error: {e}")
 
@@ -682,7 +725,7 @@ def log_reader(proc, log_queue):
         print(f"[Service] Log Reader Thread Crashed: {e}")
 
 
-def slots_poller(proc, port):
+def slots_poller(proc, inst):
     """Live pp/tg while a request is in flight.
 
     llama-server prints its timings only when a request finishes, so the dashboard
@@ -690,7 +733,7 @@ def slots_poller(proc, port):
     default and counts tokens as they come, so the rate is a difference over time.
     The log parser still overwrites both with the exact figures at the end.
     """
-    url = f"http://127.0.0.1:{port}/slots"
+    url = f"http://127.0.0.1:{inst.port}/slots"
     prev_t = prev_dec = prev_pp = None
     prev_busy = False
     # trust_env=False: the backend is our own child on loopback, so a proxy in the
@@ -718,9 +761,9 @@ def slots_poller(proc, port):
         ctx_limit = max((sl.get("n_ctx") or 0) for sl in slots)
         with state.lock:
             if ctx_used:
-                state.stats["ctx_used"] = ctx_used
+                inst.stats["ctx_used"] = ctx_used
             if ctx_limit:
-                state.stats["ctx_limit"] = ctx_limit
+                inst.stats["ctx_limit"] = ctx_limit
 
         busy = any(sl.get("is_processing") for sl in slots)
         dec = pp = 0
@@ -742,10 +785,10 @@ def slots_poller(proc, port):
             if dt > 0:
                 if dec > prev_dec:
                     with state.lock:
-                        state.stats["gen_speed"] = (dec - prev_dec) / dt
+                        inst.stats["gen_speed"] = (dec - prev_dec) / dt
                 if pp > prev_pp:
                     with state.lock:
-                        state.stats["prompt_speed"] = (pp - prev_pp) / dt
+                        inst.stats["prompt_speed"] = (pp - prev_pp) / dt
         prev_t, prev_dec, prev_pp, prev_busy = now, dec, pp, busy
 
     client.close()
@@ -879,15 +922,12 @@ def _resolve_model(requested_model: str, kind: str) -> Tuple[str, Optional[str]]
     raise HTTPException(status_code=404, detail=f"Model {requested_model} not found")
 
 
-def _autoload_model(model_key: str, quant: Optional[str]) -> None:
-    """Load the model unless it is already the running one."""
+def _autoload_model(model_key: str, quant: Optional[str]) -> Instance:
+    """Return the instance serving this model, starting it if needed."""
     with state.lock:
-        current_model = state.current_model
-        current_quant = state.current_quant
-        is_running = state.process is not None and state.process.poll() is None
-
-    if model_key == current_model and quant == current_quant and is_running:
-        return
+        inst = state.instance_for_model(model_key)
+        if inst and inst.alive() and inst.quant == quant:
+            return inst
 
     print(f"[Proxy] Auto-loading model: {model_key} (quant: {quant})")
     try:
@@ -896,6 +936,28 @@ def _autoload_model(model_key: str, quant: Optional[str]) -> None:
         raise HTTPException(status_code=404, detail=str(e))
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+    with state.lock:
+        inst = state.instance_for_model(model_key)
+    if not inst:
+        raise HTTPException(status_code=500, detail="Model failed to start")
+    return inst
+
+
+async def _await_ready(inst: Instance, seconds: int = 60) -> None:
+    """Wait for the backend to announce itself, or fail with a clear timeout."""
+    for _ in range(seconds):
+        if inst.ready:
+            return
+        if not inst.alive():
+            raise HTTPException(
+                status_code=500,
+                detail=f"{inst.label} exited while starting; see its log",
+            )
+        await asyncio.sleep(1)
+    raise HTTPException(
+        status_code=504, detail=f"{inst.label} failed to load within timeout"
+    )
 
 
 def _start_model_server(
@@ -1036,10 +1098,38 @@ def _start_model_server(
         child_env["LLAMA_ARG_LOG_VERBOSITY"] = "4"
 
     with state.lock:
-        _stop_process_unsafe()
+        # Off: starting anything clears the board, which is how it always worked.
+        # On: only the same model is replaced, so the rest keep running.
+        if state.multi:
+            _stop_instance_unsafe(model_key)
+        else:
+            _stop_all_unsafe()
+
+        inst = Instance(model_key, actual_quant, kind, port)
+        # sd-server has no context window; reporting one skews the UI gauge.
+        # Decision models do take -c, so they report it too; only the sticky
+        # selected_ctx stays an llm notion.
+        inst.ctx = ctx if kind in ("llm", "decision") else 0
+        # Only llama-server takes --parallel; sd and tts have no slots.
+        inst.parallel = parallel if kind in ("llm", "decision") else 0
+        inst.devices = devices
+        inst.frames = frames if kind == "tts" else 0
+        inst.res = res if kind == "sd" else ""
+        inst.hires = hires if kind == "sd" else False
+
+        state.selected_devices[kind] = devices
+        if kind == "llm":
+            state.selected_ctx = ctx
+            state.selected_preserve_think = preserve_think
+            state.selected_parallel = parallel
+        if kind == "tts":
+            state.selected_frames = frames
+        if kind == "sd":
+            state.selected_res = res
+            state.selected_hires = hires
 
         try:
-            state.process = subprocess.Popen(
+            inst.process = subprocess.Popen(
                 cmd_str,
                 shell=True,
                 stdout=subprocess.PIPE,
@@ -1050,53 +1140,19 @@ def _start_model_server(
                 bufsize=1,  # Line buffered
                 errors="replace",  # Replace invalid characters instead of crashing
             )
-            state.current_model = model_key
-            state.current_quant = actual_quant
-            # sd-server has no context window; reporting one skews the UI gauge.
-            # Decision models do take -c, so they report it too; only the sticky
-            # selected_ctx stays an llm notion.
-            state.current_ctx = ctx if kind in ("llm", "decision") else 0
-            # Only llama-server takes --parallel; sd and tts have no slots.
-            state.current_parallel = parallel if kind in ("llm", "decision") else 0
-            state.current_devices = devices
-            state.selected_devices[kind] = devices
-            if kind == "llm":
-                state.selected_ctx = ctx
-                state.selected_preserve_think = preserve_think
-                state.selected_parallel = parallel
-            state.current_frames = frames if kind == "tts" else 0
-            if kind == "tts":
-                state.selected_frames = frames
-            state.current_res = res if kind == "sd" else ""
-            state.current_hires = hires if kind == "sd" else False
-            if kind == "sd":
-                state.selected_res = res
-                state.selected_hires = hires
-            state.current_port = port
-            state.current_kind = kind
-
-            # A fresh buffer for this process. The previous reader thread keeps
-            # appending to the old deque, which nothing points at any more, so
-            # the two never mix.
-            state.logs = deque(maxlen=2000)
-            state.logs_model = (
-                f"{model_key}:{actual_quant}" if actual_quant else model_key
-            )
-            state.logs_kind = kind
-
-            t = threading.Thread(
-                target=log_reader, args=(state.process, state.logs), daemon=True
-            )
-            t.start()
-
-            if kind == "llm":
-                threading.Thread(
-                    target=slots_poller, args=(state.process, port), daemon=True
-                ).start()
-
         except Exception as e:
-            state.process = None
             raise RuntimeError(str(e))
+
+        state.instances[model_key] = inst
+
+        threading.Thread(
+            target=log_reader, args=(inst.process, inst), daemon=True
+        ).start()
+
+        if kind == "llm":
+            threading.Thread(
+                target=slots_poller, args=(inst.process, inst), daemon=True
+            ).start()
 
     return {"port": port, "command": cmd_str}
 
@@ -1216,34 +1272,65 @@ def get_v1_models():
 
 
 @app.get("/api/status")
-def get_status():
+def get_status(model: Optional[str] = None):
+    """Everything that is up, plus the sticky choices the dashboard mirrors.
+
+    "instances" is the list; the flat fields describe one of them, chosen by the
+    ?model= query, so a caller that cares about a single backend need not sift.
+    """
     with state.lock:
-        is_running = state.process is not None and state.process.poll() is None
+        instances = [i.to_dict() for i in state.instances.values()]
+        picked = None
+        if model:
+            inst = state.instance_for_model(model)
+            picked = inst.to_dict() if inst else None
+        elif len(instances) == 1:
+            picked = instances[0]
+
+        flat = picked or {
+            "running": False,
+            "ready": False,
+            "model": None,
+            "quantization": None,
+            "kind": None,
+            "ctx": 0,
+            "parallel": 0,
+            "devices": "",
+            "frames": 0,
+            "res": "",
+            "hires": False,
+            "port": None,
+            "pid": None,
+            "stats": _new_stats(),
+        }
+
         return {
-            "running": is_running,
-            "ready": state.ready,
-            "model": state.current_model,
-            "quantization": state.current_quant,
-            "kind": state.current_kind,
-            "ctx": state.current_ctx,
+            **flat,
+            "instances": instances,
+            "multi": state.multi,
+            "host": state.host,
             "selected_ctx": state.selected_ctx or state.default_ctx,
-            "parallel": state.current_parallel,
             "selected_parallel": state.selected_parallel or state.default_parallel,
-            "devices": state.current_devices,
             # A map, not one value: the picker shows the choice for the open tab.
             "selected_devices": dict(state.selected_devices),
             "selected_preserve_think": state.selected_preserve_think,
-            "frames": state.current_frames,
             "selected_frames": state.selected_frames or state.default_frames,
-            "res": state.current_res,
             "selected_res": state.selected_res or state.default_res,
-            "hires": state.current_hires,
             "selected_hires": state.selected_hires,
-            "port": state.current_port if is_running else None,
-            "host": state.host,
-            "pid": state.process.pid if state.process and is_running else None,
-            "stats": state.stats,  # Add stats to response
         }
+
+
+class MultiRequest(BaseModel):
+    multi: bool
+
+
+@app.post("/api/multi")
+def set_multi(req: MultiRequest):
+    """Hold several models at once, or evict everything on each start."""
+    with state.lock:
+        state.multi = req.multi
+        # Turning it off leaves whatever is up; the next start clears the board.
+    return {"multi": state.multi}
 
 
 @app.get("/api/devices")
@@ -1252,30 +1339,49 @@ def get_devices():
     return {"devices": list_devices(refresh=True)}
 
 
+def _log_instance(model: Optional[str]) -> Optional[Instance]:
+    """The instance whose log is being asked for."""
+    with state.lock:
+        if model:
+            return state.instance_for_model(model)
+        if len(state.instances) == 1:
+            return next(iter(state.instances.values()))
+        return None
+
+
 @app.get("/api/logs")
-def get_logs():
+def get_logs(model: Optional[str] = None):
     # Kept after the process exits: a crash is read from the log it left behind.
-    return list(state.logs)
+    inst = _log_instance(model)
+    return list(inst.logs) if inst else []
 
 
 @app.get("/api/logs/owner")
-def get_logs_owner():
-    """Which model produced the log currently being served, and of what kind."""
-    return {"model": state.logs_model, "kind": state.logs_kind}
+def get_logs_owner(model: Optional[str] = None):
+    """Which model produced the log being served, and of what kind."""
+    inst = _log_instance(model)
+    if not inst:
+        return {"model": None, "kind": None}
+    return {"model": inst.label, "kind": inst.kind}
 
 
 @app.post("/api/logs/clear")
-def clear_logs():
-    with state.lock:
-        state.logs.clear()
+def clear_logs(model: Optional[str] = None):
+    inst = _log_instance(model)
+    if inst:
+        inst.logs.clear()
     return {"status": "cleared"}
 
 
 @app.post("/api/stop")
-def stop_server():
+def stop_server(model: Optional[str] = None):
+    """Stop one model, or everything when no model is named."""
     with state.lock:
-        _stop_process_unsafe()
-    return {"status": "stopped"}
+        if model:
+            stopped = 1 if _stop_instance_unsafe(model) else 0
+        else:
+            stopped = _stop_all_unsafe()
+    return {"status": "stopped", "stopped": stopped}
 
 
 @app.post("/api/start")
@@ -1314,21 +1420,11 @@ async def proxy_to_llama(request: Request):
         raise HTTPException(status_code=400, detail="Model field required")
 
     # Text endpoints resolve against text models only, matching /v1/models.
-    _autoload_model(*_resolve_model(requested_model, "llm"))
+    inst = _autoload_model(*_resolve_model(requested_model, "llm"))
+    await _await_ready(inst)
 
-    retries = 0
-    while retries < 60:  # seconds
-        if state.ready:
-            break
-        await asyncio.sleep(1)
-        retries += 1
-
-    if not state.ready:
-        raise HTTPException(
-            status_code=504, detail="Model failed to load within timeout"
-        )
-
-    target_url = f"http://{state.host}:{state.current_port}{request.url.path}"
+    # Its own port, so another model being up changes nothing for this request.
+    target_url = f"http://{state.host}:{inst.port}{request.url.path}"
 
     filtered_headers = {
         k: v
@@ -1440,29 +1536,27 @@ async def _proxy_to_current(
         raw_body, request.headers.get("content-type", "")
     )
     if requested_model:
-        _autoload_model(*_resolve_model(requested_model, kind))
+        inst = _autoload_model(*_resolve_model(requested_model, kind))
+    else:
+        # No model named: serve it from the one instance of this kind, if there
+        # is exactly one. With several up, the request has to say which.
+        with state.lock:
+            candidates = [i for i in state.instances_of_kind(kind) if i.alive()]
+        if not candidates:
+            raise HTTPException(
+                status_code=503, detail=f"No {kind} model is running"
+            )
+        if len(candidates) > 1:
+            names = ", ".join(sorted(i.model_key for i in candidates))
+            raise HTTPException(
+                status_code=409,
+                detail=f"Several {kind} models are running ({names}); "
+                       f"name one in the request",
+            )
+        inst = candidates[0]
 
-    with state.lock:
-        is_running = state.process is not None and state.process.poll() is None
-        current_kind = state.current_kind
-        port = state.current_port
-
-    if not is_running:
-        raise HTTPException(status_code=503, detail="No model is running")
-    if current_kind != kind:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Current model is '{current_kind}', load a {kind} model first",
-        )
-
-    retries = 0
-    while retries < 60 and not state.ready:
-        await asyncio.sleep(1)
-        retries += 1
-    if not state.ready:
-        raise HTTPException(status_code=504, detail="Model failed to load in time")
-
-    target_url = f"http://{state.host}:{port}/{path}"
+    await _await_ready(inst)
+    target_url = f"http://{state.host}:{inst.port}/{path}"
     if request.url.query:
         target_url += f"?{request.url.query}"
 

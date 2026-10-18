@@ -152,6 +152,17 @@
                         </div>
 
                         <div class="dash-column settings-column">
+                            <div class="control-group compact-group" id="multi-control">
+                                <label for="multi-input" title="On: loading a model leaves the others running, so a language model, an image model and a voice can be up at once. Off: each start stops everything else, which is how it used to work.">Multi-model</label>
+                                <div class="input-wrapper">
+                                    <label class="switch">
+                                        <input type="checkbox" id="multi-input" onchange="applyMultiChange()">
+                                        <span class="switch-track"><span class="switch-thumb"></span></span>
+                                    </label>
+                                    <span class="switch-state" id="multi-state">Off</span>
+                                </div>
+                            </div>
+
                             <div class="control-group compact-group" id="devices-control">
                                 <label for="devices-input" title="Which cards the model may use. All lets the backend spread it across every device, as before. Applied when the model loads, so changing it reloads it.">GPU</label>
                                 <div class="input-wrapper">
@@ -288,6 +299,6 @@
             </section>
         </main>
     </div>
-    <script src="/static/js/app.js?v=33"></script>
+    <script src="/static/js/app.js?v=34"></script>
 </body>
 </html>

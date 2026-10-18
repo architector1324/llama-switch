@@ -80,6 +80,20 @@ let parallelInputPristine = true;
 // status poll must stop overwriting them, or a pick made while nothing is
 // loaded is undone a few seconds later.
 let devicesInputPristine = true;
+// With several models up, the dashboard still shows one. Default: the instance
+// of the open section; a click on a running model in the list picks that one.
+let focusedModel = null;
+let instances = [];
+
+function instanceFor(section) {
+    const here = instances.filter(i => i.kind === section);
+    if (!here.length) return null;
+    return here.find(i => i.model === focusedModel) || here[0];
+}
+
+function runningInstance() {
+    return instanceFor(activeSection);
+}
 let preserveInputPristine = true;
 
 // Two identical cards are told apart only by index and bus address, so both go
@@ -89,16 +103,19 @@ let preserveInputPristine = true;
 // Returns the owner so the caller can decide whether this section sees the log.
 async function fetchLogsOwner() {
     const el = document.getElementById('logs-owner');
+    const inst = runningInstance();
     let owner = { model: null, kind: null };
-    try {
-        const res = await fetch('/api/logs/owner');
-        owner = await res.json();
-    } catch (e) {
-        // Leave it empty; the caller treats that as "nothing to show".
+    if (inst) {
+        try {
+            const res = await fetch(`/api/logs/owner?model=${encodeURIComponent(inst.model)}`);
+            owner = await res.json();
+        } catch (e) {
+            // Leave it empty; the caller treats that as "nothing to show".
+        }
     }
-    const mine = owner.kind === activeSection;
+    const mine = !!(inst && owner.kind === activeSection);
     if (el) el.textContent = (mine && owner.model) ? `· ${owner.model}` : '';
-    return { ...owner, mine };
+    return { ...owner, mine, model: inst ? inst.model : null };
 }
 
 // Image pipelines are split across modules; sd-server takes a card per module.
@@ -152,9 +169,8 @@ function profileDeviceRoles(modelKey, quant) {
 }
 
 function renderSdProfileLabels() {
-    const roles = (lastStatus && lastStatus.running && lastStatus.kind === 'sd')
-        ? profileDeviceRoles(lastStatus.model, lastStatus.quantization)
-        : {};
+    const sdInst = instanceFor('sd');
+    const roles = sdInst ? profileDeviceRoles(sdInst.model, sdInst.quantization) : {};
     for (const [role, id] of SD_DEVICE_ROLES) {
         const el = document.getElementById(id);
         if (!el || !el.options.length) continue;
@@ -196,8 +212,9 @@ async function fetchConfig() {
             const resInput = document.getElementById('res-input');
             if (resInput) resInput.value = data.default_res;
         }
-        if (lastStatus && lastStatus.running && lastStatus.kind) {
-            activeSection = lastStatus.kind;
+        const up = (lastStatus && lastStatus.instances) || [];
+        if (up.length && !up.some(i => i.kind === activeSection)) {
+            activeSection = up[0].kind;
             localStorage.setItem('activeSection', activeSection);
         }
         renderSectionTabs();
@@ -313,19 +330,20 @@ function renderModelGroup(list, models, modelKeys, sectionName) {
 function handleModelClick(key) {
     const quantSelect = document.getElementById(`quant-select-${key}`);
     const quantization = quantSelect ? quantSelect.value : null;
+    const inst = instances.find(i => i.model === key);
 
-    if (lastStatus && lastStatus.running && lastStatus.model === key && lastStatus.ready) {
-        if (!quantization || lastStatus.quantization === quantization) {
-            unloadModel();
-            return;
-        }
+    if (inst && inst.ready && (!quantization || inst.quantization === quantization)) {
+        unloadModel(key);
+        return;
     }
-    
+
+    // The dashboard follows whatever was last asked for in this section.
+    focusedModel = key;
     loadModel(key, quantization);
 }
 
 function handleQuantChange(key) {
-    if (lastStatus && lastStatus.running && lastStatus.model === key) {
+    if (instances.some(i => i.model === key)) {
         const quantSelect = document.getElementById(`quant-select-${key}`);
         const quantization = quantSelect ? quantSelect.value : null;
         loadModel(key, quantization);
@@ -378,24 +396,23 @@ async function loadModel(key, quantization = null) {
     }
 }
 
-async function unloadModel() {
-    await fetch('/api/stop', { method: 'POST' });
+async function unloadModel(key) {
+    // Without a model this stops everything, which is what Stop All wants.
+    const url = key ? `/api/stop?model=${encodeURIComponent(key)}` : '/api/stop';
+    await fetch(url, { method: 'POST' });
     currentLoadingModel = null;
+    pollStatus();
 }
 
 // Every control reloads the model to take effect, so each one must first ask
 // whether the running model is the one this tab is about. Otherwise changing
 // Output Size on the Image tab restarted a language model.
-function runningModelIsMine() {
-    return !!(lastStatus && lastStatus.running && lastStatus.model
-              && lastStatus.kind === activeSection);
-}
-
 function reloadCurrentModel() {
-    if (!runningModelIsMine()) {
+    const inst = runningInstance();
+    if (!inst) {
         return; // Nothing of ours is loaded: the setting waits for the next start
     }
-    loadModel(lastStatus.model, lastStatus.quantization);
+    loadModel(inst.model, inst.quantization);
 }
 
 async function applyContextChange() {
@@ -482,6 +499,29 @@ function renderParallelHint() {
     hint.textContent = (n > 1 && ctx) ? `${n} \u00d7 ${ctx} = ${n * ctx} ctx total` : '';
 }
 
+function renderMultiState(on) {
+    const label = document.getElementById('multi-state');
+    if (!label) return;
+    label.textContent = on ? 'On' : 'Off';
+    label.classList.toggle('is-on', !!on);
+}
+
+async function applyMultiChange() {
+    const input = document.getElementById('multi-input');
+    const on = !!(input && input.checked);
+    renderMultiState(on);
+    try {
+        await fetch('/api/multi', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ multi: on }),
+        });
+    } catch (e) {
+        console.error('Failed to set multi-model', e);
+    }
+    pollStatus();
+}
+
 async function applyDevicesChange() {
     // Once picked, the choice is the user's until the page is reloaded.
     devicesInputPristine = false;
@@ -508,9 +548,9 @@ async function applyResChange() {
 }
 
 async function stopServer() {
-    if(!confirm("Stop current Llama server?")) return;
-    await fetch('/api/stop', { method: 'POST' });
-    currentLoadingModel = null;
+    const n = instances.length;
+    if (!confirm(n > 1 ? `Stop all ${n} running models?` : 'Stop the running model?')) return;
+    await unloadModel();
 }
 
 async function pollStatus() {
@@ -520,12 +560,15 @@ async function pollStatus() {
         updateStatusDisplay(status);
         updateActiveModel(status);
 
-        if (currentLoadingModel && status.running && status.model === currentLoadingModel && status.ready) {
+        const loaded = (status.instances || []).find(i => i.model === currentLoadingModel);
+        if (currentLoadingModel && loaded && loaded.ready) {
             currentLoadingModel = null;
         }
-
-        if (currentLoadingModel && (!status.running || (status.model && status.model !== currentLoadingModel))) {
-            currentLoadingModel = null;
+        // With eviction on, the start we were waiting for can be undone by the
+        // next one; the instance simply is not there any more.
+        if (currentLoadingModel && !loaded && (status.instances || []).length) {
+            const anyStarting = (status.instances || []).some(i => !i.ready);
+            if (!anyStarting) currentLoadingModel = null;
         }
 
         updateButtonsState(status);
@@ -539,11 +582,12 @@ async function refreshLogs() {
     const container = document.getElementById('logs-container');
     if (!container) return;
     try {
-        const res = await fetch('/api/logs');
-        const lines = await res.json();
-        // A log belongs to the section its process came from. Showing a
-        // language model's output under Image was plain wrong.
+        // A log belongs to one instance, so it is fetched by name.
         const owner = await fetchLogsOwner();
+        const res = await fetch(owner.model
+            ? `/api/logs?model=${encodeURIComponent(owner.model)}`
+            : '/api/logs');
+        const lines = await res.json();
 
         const isAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 50;
 
@@ -572,6 +616,16 @@ function startPolling() {
 
 function updateStatusDisplay(status) {
     lastStatus = status;
+    instances = status.instances || [];
+    // The instance this tab is about. Null means nothing of this kind is up,
+    // whatever else may be running.
+    const inst = runningInstance();
+
+    const multiInput = document.getElementById('multi-input');
+    if (multiInput && document.activeElement !== multiInput) {
+        multiInput.checked = !!status.multi;
+        renderMultiState(multiInput.checked);
+    }
 
     // Mirror the server's remembered ctx so a reload keeps the chosen value.
     if (ctxInputPristine && status.selected_ctx) {
@@ -655,7 +709,7 @@ function updateStatusDisplay(status) {
 
     // Looking at a tab whose backend is not the running one: the numbers on screen
     // would belong to someone else, so blank them rather than leave them stale.
-    const showsRunningKind = status.running && status.kind === activeSection;
+    const showsRunningKind = !!inst;
     if (!showsRunningKind) {
         ['stat-gen-speed', 'stat-prompt-speed', 'stat-total-tokens', 'stat-ctx-usage',
          'stat-sd-speed', 'stat-sd-last', 'stat-sd-progress', 'stat-sd-images',
@@ -669,39 +723,38 @@ function updateStatusDisplay(status) {
         renderMemDevices(null);
     }
 
-    if (status.running && !showsRunningKind) {
-        // Something runs, but not in this section. Saying its name here claimed a
-        // speech model was loaded when it was a language one.
+    if (!inst) {
+        // Something may well be running elsewhere; this section has nothing.
         indicator.classList.remove('on');
-        statusText.innerText = 'Not loaded';
+        statusText.innerText = instances.length ? 'Not loaded' : 'Stopped';
         statusText.style.color = 'var(--text-secondary)';
         modelText.innerText = '-';
         webuiBtn.style.display = 'none';
     }
 
-    if (status.running) {
-        if (showsRunningKind) {
+    if (inst) {
+        {
             indicator.classList.add('on');
-            statusText.innerText = `Running (Port: ${status.port || '?'})`;
+            statusText.innerText = `Running (Port: ${inst.port || '?'})`;
             statusText.style.color = 'var(--success)';
-            modelText.innerText = status.model || 'Unknown';
+            modelText.innerText = inst.model || 'Unknown';
         }
 
         // Memory is reported by every llama.cpp-based backend, so it is filled
         // before the per-kind branches rather than inside the llm one. Guarded by
         // the same rule as the rest: another tab must not show these numbers.
-        if (status.stats && showsRunningKind) {
+        if (inst.stats) {
             const memModelEl = document.getElementById('stat-mem-model');
-            if (memModelEl) memModelEl.innerText = formatMiB(status.stats.mem_model);
+            if (memModelEl) memModelEl.innerText = formatMiB(inst.stats.mem_model);
 
             const memCtxEl = document.getElementById('stat-mem-context');
-            if (memCtxEl) memCtxEl.innerText = formatMiB(status.stats.mem_context);
+            if (memCtxEl) memCtxEl.innerText = formatMiB(inst.stats.mem_context);
 
-            renderMemDevices(status.stats.mem_devices);
+            renderMemDevices(inst.stats.mem_devices);
         }
 
-        if (status.stats && status.kind === 'sd') {
-            const s = status.stats;
+        if (inst.stats && inst.kind === 'sd') {
+            const s = inst.stats;
 
             const speedEl = document.getElementById('stat-sd-speed');
             if (speedEl) speedEl.innerText = s.sd_speed ? `${s.sd_speed.toFixed(2)} s/it` : '-';
@@ -726,8 +779,8 @@ function updateStatusDisplay(status) {
             // first image.
             const sdComputeEl = document.getElementById('stat-sd-mem-compute');
             if (sdComputeEl) sdComputeEl.innerText = formatMiB(s.mem_compute);
-        } else if (status.stats && status.kind === 'tts') {
-            const s = status.stats;
+        } else if (inst.stats && inst.kind === 'tts') {
+            const s = inst.stats;
 
             // RTF below 1 is faster than realtime; the multiple reads better.
             const rtfEl = document.getElementById('stat-tts-rtf');
@@ -745,8 +798,8 @@ function updateStatusDisplay(status) {
 
             const clEl = document.getElementById('stat-tts-clips');
             if (clEl) clEl.innerText = s.tts_clips || 0;
-        } else if (status.stats && status.kind === 'decision') {
-            const s = status.stats;
+        } else if (inst.stats && inst.kind === 'decision') {
+            const s = inst.stats;
 
             // The server's own clock, so it excludes the trip to the client.
             const msEl = document.getElementById('stat-dec-ms');
@@ -757,43 +810,37 @@ function updateStatusDisplay(status) {
 
             const cnEl = document.getElementById('stat-dec-count');
             if (cnEl) cnEl.innerText = s.decision_count || 0;
-        } else if (status.stats && status.kind !== 'music') {
-            const used = status.stats.ctx_used || 0;
-            const limit = status.ctx || 0;
+        } else if (inst.stats && inst.kind !== 'music') {
+            const used = inst.stats.ctx_used || 0;
+            const limit = inst.ctx || 0;
 
             const ctxUsageEl = document.getElementById('stat-ctx-usage');
             if (ctxUsageEl) ctxUsageEl.innerText = `${used} / ${limit}`;
 
             const genSpeedEl = document.getElementById('stat-gen-speed');
-            if (genSpeedEl) genSpeedEl.innerText = status.stats.gen_speed ? `${status.stats.gen_speed.toFixed(2)} t/s` : '-';
+            if (genSpeedEl) genSpeedEl.innerText = inst.stats.gen_speed ? `${inst.stats.gen_speed.toFixed(2)} t/s` : '-';
 
             const promptSpeedEl = document.getElementById('stat-prompt-speed');
-            if (promptSpeedEl) promptSpeedEl.innerText = status.stats.prompt_speed ? `${status.stats.prompt_speed.toFixed(2)} t/s` : '-';
+            if (promptSpeedEl) promptSpeedEl.innerText = inst.stats.prompt_speed ? `${inst.stats.prompt_speed.toFixed(2)} t/s` : '-';
 
             const totalTokensEl = document.getElementById('stat-total-tokens');
-            if(totalTokensEl) totalTokensEl.innerText = status.stats.total_tokens || 0;
+            if(totalTokensEl) totalTokensEl.innerText = inst.stats.total_tokens || 0;
         }
 
         // Decision models serve /v1/systemone and nothing else: clef has no web page
         // at all, so the button would open a blank engine root.
-        if (status.ready && status.kind !== 'decision' && showsRunningKind) {
+        if (inst.ready && inst.kind !== 'decision') {
             webuiBtn.style.display = 'inline-block';
             // Straight to the engine's own address: every engine page calls its own
             // paths absolutely, so none of them survive being served under a prefix.
             const displayHost = (status.host === '0.0.0.0') ? window.location.hostname : status.host;
-            webuiBtn.href = `http://${displayHost}:${status.port}`;
+            webuiBtn.href = `http://${displayHost}:${inst.port}`;
         } else {
             webuiBtn.style.display = 'none';
         }
 
         
     } else {
-        indicator.classList.remove('on');
-        statusText.innerText = 'Stopped';
-        statusText.style.color = 'var(--text-secondary)';
-        if (!status.model) modelText.innerText = '-';
-        webuiBtn.style.display = 'none';
-        
         const ctxUsageEl = document.getElementById('stat-ctx-usage');
         if (ctxUsageEl) ctxUsageEl.innerText = '-';
         
@@ -860,52 +907,52 @@ function applyDashboardKind(kind) {
 }
 
 function updateActiveModel(status) {
+    const byKey = new Map((status.instances || []).map(i => [i.model, i]));
     document.querySelectorAll('.model-item').forEach(el => {
         el.classList.remove('active');
-        if (status.running && status.model === el.dataset.key) {
-            el.classList.add('active');
-            
-            const quantSelect = el.querySelector('.quant-select');
-            if (quantSelect && status.quantization && quantSelect.value !== status.quantization) {
-                quantSelect.value = status.quantization;
-            }
+        const inst = byKey.get(el.dataset.key);
+        if (!inst) return;
+        el.classList.add('active');
+
+        const quantSelect = el.querySelector('.quant-select');
+        if (quantSelect && inst.quantization && quantSelect.value !== inst.quantization) {
+            quantSelect.value = inst.quantization;
         }
     });
 }
 
 function updateButtonsState(status) {
-    const isRunning = status ? status.running : false;
-    const runningModel = status ? status.model : null;
-    const isReady = status ? status.ready : false;
+    const byKey = new Map(((status && status.instances) || []).map(i => [i.model, i]));
 
     document.querySelectorAll('.model-item').forEach(el => {
         const key = el.dataset.key;
         const btn = el.querySelector('.model-btn');
-        
+        const inst = byKey.get(key);
+
         btn.classList.remove('btn-primary', 'btn-danger', 'btn-warning', 'btn-success');
         btn.disabled = false;
 
-        if (isRunning && key === runningModel && isReady) {
+        if (inst && inst.ready) {
             const quantSelect = el.querySelector('.quant-select');
             const selectedQuant = quantSelect ? quantSelect.value : null;
-            
-            if (!selectedQuant || selectedQuant === status.quantization) {
+
+            if (!selectedQuant || selectedQuant === inst.quantization) {
                 btn.innerText = "Unload";
                 btn.classList.add('btn-danger');
             } else {
                 btn.innerText = "Switch";
                 btn.classList.add('btn-primary');
             }
-            
+
             if (key === currentLoadingModel) {
                 currentLoadingModel = null;
             }
-            
+
         } else if (key === currentLoadingModel) {
             btn.innerText = "Starting...";
             btn.classList.add('btn-warning'); 
             btn.disabled = true;
-        } else if (isRunning && key === runningModel) {
+        } else if (inst) {
             btn.innerText = "Starting...";
             btn.classList.add('btn-warning');
             btn.disabled = true;
@@ -934,7 +981,7 @@ async function copyLogs() {
         if (!owner.mine) {
             throw new Error('log belongs to another section');
         }
-        const res = await fetch('/api/logs');
+        const res = await fetch(`/api/logs?model=${encodeURIComponent(owner.model)}`);
         const text = (await res.json()).join('\n');
         // navigator.clipboard exists only on a secure origin, and the dashboard is
         // plain http on the LAN, which is exactly where the phone opens it.
@@ -969,7 +1016,8 @@ async function clearLogs() {
     const owner = await fetchLogsOwner();
     if (!owner.mine) return;
     try {
-        await fetch('/api/logs/clear', { method: 'POST' });
+        await fetch(`/api/logs/clear?model=${encodeURIComponent(owner.model)}`,
+                    { method: 'POST' });
         const container = document.getElementById('logs-container');
         container.innerHTML = '<div class="log-line">Waiting for logs...</div>';
     } catch (e) {

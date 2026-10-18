@@ -282,8 +282,14 @@ body {
     border-color: var(--success);
 }
 
-.model-item.active {
+.model-item {
     cursor: pointer;
+}
+
+/* Picked but not loaded: the dashboard is showing what it would start with. */
+.model-item.selected {
+    background-color: var(--bg-hover);
+    border-color: var(--border);
 }
 
 .model-info {

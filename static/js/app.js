@@ -87,8 +87,13 @@ let instances = [];
 
 function instanceFor(section) {
     const here = instances.filter(i => i.kind === section);
-    if (!here.length) return null;
-    return here.find(i => i.model === focusedModel) || here[0];
+    const kinds = (currentConfig && currentConfig.kinds) || {};
+    // A row picked in this section wins, even when it is not loaded: then the
+    // dashboard describes what Load would start, not somebody else's instance.
+    if (focusedModel && kinds[focusedModel] === section) {
+        return here.find(i => i.model === focusedModel) || null;
+    }
+    return here[0] || null;
 }
 
 function runningInstance() {
@@ -339,8 +344,9 @@ function resetControlPristine() {
     devicesInputPristine = true;
 }
 
+// Any row can be picked, running or not: picking one that is not up yet is how
+// its settings get dialled in before Load.
 function focusModel(key) {
-    if (!instances.some(i => i.model === key)) return;
     focusedModel = key;
     resetControlPristine();
     if (lastStatus) updateStatusDisplay(lastStatus);
@@ -753,10 +759,13 @@ function updateStatusDisplay(status) {
 
     if (!inst) {
         // Something may well be running elsewhere; this section has nothing.
+        const pickedHere = focusedModel
+            && currentConfig.kinds
+            && currentConfig.kinds[focusedModel] === activeSection;
         indicator.classList.remove('on');
-        statusText.innerText = instances.length ? 'Not loaded' : 'Stopped';
+        statusText.innerText = 'Not loaded';
         statusText.style.color = 'var(--text-secondary)';
-        modelText.innerText = '-';
+        modelText.innerText = pickedHere ? focusedModel : '-';
         webuiBtn.style.display = 'none';
     }
 
@@ -938,9 +947,13 @@ function updateActiveModel(status) {
     const byKey = new Map((status.instances || []).map(i => [i.model, i]));
     const shown = runningInstance();
     document.querySelectorAll('.model-item').forEach(el => {
-        el.classList.remove('active', 'focused');
+        el.classList.remove('active', 'focused', 'selected');
         const inst = byKey.get(el.dataset.key);
-        if (!inst) return;
+        if (!inst) {
+            // Picked but not loaded: the dashboard is dialling it in.
+            if (el.dataset.key === focusedModel) el.classList.add('selected');
+            return;
+        }
         el.classList.add('active');
         // The one the dashboard is reporting on, when several are up.
         if (shown && shown.model === inst.model) el.classList.add('focused');

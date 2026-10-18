@@ -862,6 +862,18 @@ input[type="number"]:focus {
     color: var(--success);
 }
 
+/* Nothing loaded: the same tab in the danger colour, so an empty board is
+   visible from any section. */
+.section-tab.running-tab.idle,
+.section-tab.running-tab.idle:hover {
+    color: var(--danger);
+}
+
+.section-tab.running-tab.idle.active {
+    border-color: var(--danger);
+    color: var(--danger);
+}
+
 /* Quant and kind side by side: the Running list mixes kinds. */
 .running-meta {
     display: flex;

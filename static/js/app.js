@@ -150,6 +150,17 @@ function renderRunningList(list) {
     });
 }
 
+// Green only when something is really up: alive and past loading. A model
+// still starting, or one whose process died, does not count.
+function anythingLoaded() {
+    return instances.some(i => i.running && i.ready);
+}
+
+function paintRunningTab() {
+    const tab = document.querySelector('.section-tab.running-tab');
+    if (tab) tab.classList.toggle('idle', !anythingLoaded());
+}
+
 function runningSignature() {
     return sortedInstances().map(i => `${i.model}:${i.quantization}:${i.kind}`).join('|');
 }
@@ -304,7 +315,7 @@ function renderSectionTabs() {
     bar.innerHTML = names.map(n =>
         `<button class="section-tab${n === activeSection ? ' active' : ''}" onclick="selectSection('${n}')">${SECTION_LABELS[n] || n}</button>`
     ).join('') +
-        `<button class="section-tab running-tab${activeSection === RUNNING ? ' active' : ''}" onclick="selectSection('${RUNNING}')">Running</button>`;
+        `<button class="section-tab running-tab${activeSection === RUNNING ? ' active' : ''}${anythingLoaded() ? '' : ' idle'}" onclick="selectSection('${RUNNING}')">Running</button>`;
 }
 
 function selectSection(name) {
@@ -837,6 +848,8 @@ function updateStatusDisplay(status) {
     const webuiBtn = document.getElementById('webui-btn');
     
     applyDashboardKind(dashboardKind());
+
+    paintRunningTab();
 
     // Models start and stop under the Running tab; redraw its list when the set
     // changes, not on every poll, so hover and scroll survive.

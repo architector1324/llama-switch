@@ -297,7 +297,7 @@ async function fetchConfig() {
     }
 }
 
-const SECTION_LABELS = { llm: 'Language', sd: 'Image', tts: 'Speech', music: 'Music', decision: 'Decision' };
+const SECTION_LABELS = { llm: 'Language', sd: 'Image', tts: 'Speech', stt: 'Transcription', music: 'Music', decision: 'Decision' };
 
 // The dashboard follows the tab, not the running model: otherwise it stays on
 // Language until an image model is loaded for the first time.
@@ -966,7 +966,7 @@ function updateStatusDisplay(status) {
 
             const cnEl = document.getElementById('stat-dec-count');
             if (cnEl) cnEl.innerText = s.decision_count || 0;
-        } else if (inst.stats && inst.kind !== 'music') {
+        } else if (inst.stats && inst.kind !== 'music' && inst.kind !== 'stt') {
             const used = inst.stats.ctx_used || 0;
             const limit = inst.ctx || 0;
 
@@ -1034,10 +1034,12 @@ function applyDashboardKind(kind) {
     // Music has no counters of its own yet, but it is not a language model either:
     // showing the llm block would report someone else's tokens.
     const isMusic = kind === 'music';
+    // Recognition has no counters of its own either, and no frames or output size.
+    const isStt = kind === 'stt';
     // Decision models answer in one forward pass and generate no tokens, so the
     // llm counters would read zero; they do take -c, so the context control stays.
     const isDecision = kind === 'decision';
-    const notLlm = isSd || isTts || isMusic || isDecision;
+    const notLlm = isSd || isTts || isStt || isMusic || isDecision;
     const llmStats = document.getElementById('stats-llm');
     const memStats = document.getElementById('stats-mem');
     const memDevices = document.getElementById('mem-devices-row');
@@ -1055,7 +1057,7 @@ function applyDashboardKind(kind) {
 
     if (llmStats) llmStats.style.display = notLlm ? 'none' : '';
     if (memStats) memStats.style.display = (notLlm && !isDecision) ? 'none' : '';
-    if (memDevices) memDevices.style.display = (isTts || isMusic) ? 'none' : '';
+    if (memDevices) memDevices.style.display = (isTts || isStt || isMusic) ? 'none' : '';
     if (sdStats) sdStats.style.display = isSd ? '' : 'none';
     if (ttsStats) ttsStats.style.display = isTts ? '' : 'none';
     if (decStats) decStats.style.display = isDecision ? '' : 'none';

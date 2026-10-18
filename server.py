@@ -123,7 +123,7 @@ def list_devices(refresh: bool = False) -> List[Dict]:
 
 
 # --- Config Manager ---
-SECTIONS = ("llm", "sd", "tts", "music", "decision")
+SECTIONS = ("llm", "sd", "tts", "stt", "music", "decision")
 
 # What a kind can do and where it is served. Published in /v1/models so a client
 # can tell the sections apart, the way ollama's "capabilities" is used; the list
@@ -132,6 +132,7 @@ KIND_CAPABILITIES = {
     "llm": ["completion", "chat"],
     "sd": ["image"],
     "tts": ["audio", "speech"],
+    "stt": ["audio", "transcription"],
     "music": ["audio", "music"],
     "decision": ["completion"],
 }
@@ -140,6 +141,7 @@ KIND_ENDPOINT = {
     "llm": "/v1/chat/completions",
     "sd": "/v1/images/generations",
     "tts": "/v1/audio/speech",
+    "stt": "/v1/audio/transcriptions",
     # audio.cpp generates music through its own task endpoint; /v1/audio/* is tts.
     "music": "/v1/tasks/",
     "decision": "/v1/systemone",
@@ -1705,7 +1707,7 @@ async def proxy_sdcpp(request: Request, path: str):
     return await _proxy_to_current(request, f"sdcpp/v1/{path}")
 
 
-# --- Audio proxy: speech and voices are tts, transcriptions are llama-server ---
+# --- Audio proxy: speech and voices are tts, transcriptions are stt or llama-server ---
 AUDIO_LLM_ENDPOINTS = ("transcriptions", "translations")
 
 # Qwen3-ASR answers with a "language <Name><asr_text>" header: llama.cpp#26749.
@@ -1889,12 +1891,27 @@ async def _clean_chat(chunks, content_type: str):
 async def proxy_audio(request: Request, path: str):
     head = path.split("/", 1)[0]
     is_asr = head in AUDIO_LLM_ENDPOINTS
+    kind = _asr_kind(await request.body(), request.headers.get("content-type", "")) if is_asr else "tts"
     return await _proxy_to_current(
         request,
         f"v1/audio/{path}",
-        kind="llm" if is_asr else "tts",
+        kind=kind,
         rewrite=_clean_transcription if is_asr else None,
     )
+
+
+def _asr_kind(raw_body: bytes, content_type: str) -> str:
+    """Transcriptions go to an stt model when one is named or running, else to an llm.
+
+    The llm path stays because a multimodal llama-server (gemma4) transcribes too.
+    """
+    requested_model = _model_from_body(raw_body, content_type)
+    if requested_model:
+        return "stt" if _lookup_model(requested_model, "stt") else "llm"
+    with state.lock:
+        if any(i.alive() for i in state.instances_of_kind("stt")):
+            return "stt"
+    return "llm"
 
 
 # audio.cpp runs generation through its own task endpoint, not the OpenAI audio one.

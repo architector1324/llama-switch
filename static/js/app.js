@@ -571,11 +571,23 @@ function updateStatusDisplay(status) {
         renderMemDevices(null);
     }
 
+    if (status.running && !showsRunningKind) {
+        // Something runs, but not in this section. Saying its name here claimed a
+        // speech model was loaded when it was a language one.
+        indicator.classList.remove('on');
+        statusText.innerText = 'Not loaded';
+        statusText.style.color = 'var(--text-secondary)';
+        modelText.innerText = '-';
+        webuiBtn.style.display = 'none';
+    }
+
     if (status.running) {
-        indicator.classList.add('on');
-        statusText.innerText = `Running (Port: ${status.port || '?'})`;
-        statusText.style.color = 'var(--success)';
-        modelText.innerText = status.model || 'Unknown';
+        if (showsRunningKind) {
+            indicator.classList.add('on');
+            statusText.innerText = `Running (Port: ${status.port || '?'})`;
+            statusText.style.color = 'var(--success)';
+            modelText.innerText = status.model || 'Unknown';
+        }
 
         // Memory is reported by every llama.cpp-based backend, so it is filled
         // before the per-kind branches rather than inside the llm one. Guarded by
@@ -666,7 +678,7 @@ function updateStatusDisplay(status) {
 
         // Decision models serve /v1/systemone and nothing else: clef has no web page
         // at all, so the button would open a blank engine root.
-        if (status.ready && status.kind !== 'decision') {
+        if (status.ready && status.kind !== 'decision' && showsRunningKind) {
             webuiBtn.style.display = 'inline-block';
             // Straight to the engine's own address: every engine page calls its own
             // paths absolutely, so none of them survive being served under a prefix.

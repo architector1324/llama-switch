@@ -76,6 +76,10 @@ let currentLoadingModel = null;
 let ctxInputPristine = true; // Field still mirrors the server, untouched
 let framesInputPristine = true;
 let parallelInputPristine = true;
+// Device pickers are launch settings like the context window: once touched, the
+// status poll must stop overwriting them, or a pick made while nothing is
+// loaded is undone a few seconds later.
+let devicesInputPristine = true;
 let preserveInputPristine = true;
 
 // Two identical cards are told apart only by index and bus address, so both go
@@ -135,6 +139,30 @@ async function fetchDevices() {
 
 // What goes to the server: a per-role assignment on the image tab, a plain
 // device name everywhere else.
+// What the profile itself says, so "Profile" can name the card it stands for.
+function profileDeviceRoles(modelKey, quant) {
+    const models = currentConfig ? currentConfig.models || {} : {};
+    const entry = models[modelKey];
+    if (!entry) return {};
+    const cmd = entry.cmd || entry[quant] || entry[Object.keys(entry)[0]] || '';
+    const m = /\$\{DEVICES:([^}]*)\}/.exec(cmd);
+    if (!m) return {};
+    return Object.fromEntries([...m[1].matchAll(/([A-Za-z_]+)=([^,\s]+)/g)]
+        .map(x => [x[1], x[2]]));
+}
+
+function renderSdProfileLabels() {
+    const roles = (lastStatus && lastStatus.running && lastStatus.kind === 'sd')
+        ? profileDeviceRoles(lastStatus.model, lastStatus.quantization)
+        : {};
+    for (const [role, id] of SD_DEVICE_ROLES) {
+        const el = document.getElementById(id);
+        if (!el || !el.options.length) continue;
+        const where = roles[role];
+        el.options[0].textContent = where ? `Profile (${where})` : 'Profile';
+    }
+}
+
 function selectedDevices() {
     if (activeSection === 'sd') {
         const parts = [];
@@ -455,6 +483,8 @@ function renderParallelHint() {
 }
 
 async function applyDevicesChange() {
+    // Once picked, the choice is the user's until the page is reloaded.
+    devicesInputPristine = false;
     reloadCurrentModel();
 }
 
@@ -562,14 +592,14 @@ function updateStatusDisplay(status) {
     const perKind = status.selected_devices || {};
     const chosen = perKind[activeSection] || '';
     const devicesInput = document.getElementById('devices-input');
-    if (devicesInput && document.activeElement !== devicesInput
+    if (devicesInputPristine && devicesInput && document.activeElement !== devicesInput
         && activeSection !== 'sd') {
         // Only when the option exists: the device list loads asynchronously.
         if ([...devicesInput.options].some(o => o.value === chosen)) {
             devicesInput.value = chosen;
         }
     }
-    if (activeSection === 'sd') {
+    if (activeSection === 'sd' && devicesInputPristine) {
         const assigned = Object.fromEntries(
             chosen.split(',').filter(Boolean).map(p => {
                 const [role, dev] = p.split('=');
@@ -583,6 +613,7 @@ function updateStatusDisplay(status) {
             if ([...el.options].some(o => o.value === want)) el.value = want;
         }
     }
+    renderSdProfileLabels();
 
     // Mirror the server's remembered choice, except while a load is in flight:
     // status still carries the old value until the new process is up.

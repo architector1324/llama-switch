@@ -152,6 +152,15 @@
                         </div>
 
                         <div class="dash-column settings-column">
+                            <div class="control-group compact-group" id="devices-control">
+                                <label for="devices-input" title="Which cards the model may use. All lets the backend spread it across every device, as before. Applied when the model loads, so changing it reloads it.">GPU</label>
+                                <div class="input-wrapper">
+                                    <select id="devices-input" class="res-select" onchange="applyDevicesChange()">
+                                        <option value="">All GPUs</option>
+                                    </select>
+                                </div>
+                            </div>
+
                             <div class="control-group compact-group" id="ctx-control">
                                 <label for="ctx-input">Context Window</label>
                                 <div class="input-wrapper">
@@ -167,15 +176,6 @@
                                     <button id="apply-parallel-btn" class="btn btn-primary btn-sm" onclick="applyParallelChange()">Apply</button>
                                 </div>
                                 <span class="control-hint" id="parallel-hint"></span>
-                            </div>
-
-                            <div class="control-group compact-group" id="devices-control">
-                                <label for="devices-input" title="Which cards the model may use. All lets the backend spread it across every device, as before. Applied when the model loads, so changing it reloads it.">GPU</label>
-                                <div class="input-wrapper">
-                                    <select id="devices-input" class="res-select" onchange="applyDevicesChange()">
-                                        <option value="">All GPUs</option>
-                                    </select>
-                                </div>
                             </div>
 
                             <div class="control-group compact-group" id="preserve-think-control">
@@ -264,6 +264,6 @@
             </section>
         </main>
     </div>
-    <script src="/static/js/app.js?v=29"></script>
+    <script src="/static/js/app.js?v=30"></script>
 </body>
 </html>

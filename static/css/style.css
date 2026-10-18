@@ -576,8 +576,13 @@ body {
     color: var(--text-muted);
 }
 
+/* Same footing as Output Size: sized to content, not stretched across the
+   panel. A floor keeps the three rows lined up when one of them says Profile. */
 .sd-device-row .res-select {
-    flex: 1 1 auto;
+    flex: 0 1 auto;
+    width: fit-content;
+    min-width: 230px;
+    max-width: 100%;
     font-size: 12px;
     padding: 5px 8px;
 }

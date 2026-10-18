@@ -268,8 +268,9 @@ class ServiceState:
         self.selected_parallel: int = 0
         # Which offload devices a model may use, comma-separated as the backend
         # names them ("Vulkan0"); empty means every device, the old behaviour.
-        # Sticky like selected_ctx.
-        self.selected_devices: str = ""
+        # Sticky per kind, like selected_res is to sd: a card picked for a
+        # language model says nothing about where an image model should go.
+        self.selected_devices: Dict[str, str] = {}
         self.current_devices: str = ""
         # Frame cap for tts, apart from ctx: 2048 frames at 12.5/s is about 164 s.
         self.default_frames: int = 2048
@@ -286,8 +287,10 @@ class ServiceState:
         # prints its memory breakdown as it dies, and those lines sitting above a
         # fresh model's output read as that model's -- which fooled both of us.
         self.logs = deque(maxlen=2000)
-        # What the current buffer belongs to, so the panel can say whose log it is.
+        # What the current buffer belongs to, so the panel can say whose log it is
+        # and hide it on a section the log has nothing to do with.
         self.logs_model: Optional[str] = None
+        self.logs_kind: Optional[str] = None
         self.lock = threading.Lock()
         self.config_mgr: Optional[ConfigManager] = None
         self.stats = {
@@ -963,7 +966,7 @@ def _start_model_server(
     # because a typo would fail obscurely at launch and because this string is
     # pasted into a shell command line.
     if devices is None:
-        devices = state.selected_devices
+        devices = state.selected_devices.get(kind, "")
     devices = (devices or "").strip()
     if devices:
         known = {d["id"] for d in list_devices()}
@@ -1041,7 +1044,7 @@ def _start_model_server(
             # Only llama-server takes --parallel; sd and tts have no slots.
             state.current_parallel = parallel if kind in ("llm", "decision") else 0
             state.current_devices = devices
-            state.selected_devices = devices
+            state.selected_devices[kind] = devices
             if kind == "llm":
                 state.selected_ctx = ctx
                 state.selected_preserve_think = preserve_think
@@ -1064,6 +1067,7 @@ def _start_model_server(
             state.logs_model = (
                 f"{model_key}:{actual_quant}" if actual_quant else model_key
             )
+            state.logs_kind = kind
 
             t = threading.Thread(
                 target=log_reader, args=(state.process, state.logs), daemon=True
@@ -1211,7 +1215,8 @@ def get_status():
             "parallel": state.current_parallel,
             "selected_parallel": state.selected_parallel or state.default_parallel,
             "devices": state.current_devices,
-            "selected_devices": state.selected_devices,
+            # A map, not one value: the picker shows the choice for the open tab.
+            "selected_devices": dict(state.selected_devices),
             "selected_preserve_think": state.selected_preserve_think,
             "frames": state.current_frames,
             "selected_frames": state.selected_frames or state.default_frames,
@@ -1240,8 +1245,8 @@ def get_logs():
 
 @app.get("/api/logs/owner")
 def get_logs_owner():
-    """Which model produced the log currently being served."""
-    return {"model": state.logs_model}
+    """Which model produced the log currently being served, and of what kind."""
+    return {"model": state.logs_model, "kind": state.logs_kind}
 
 
 @app.post("/api/logs/clear")

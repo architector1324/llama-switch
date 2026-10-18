@@ -82,16 +82,19 @@ let preserveInputPristine = true;
 // in the label. "All" stays the default: the backend spreads the model itself.
 // The log belongs to one launched process; say which, so lines left by a model
 // that has since exited are not read as the current one's.
+// Returns the owner so the caller can decide whether this section sees the log.
 async function fetchLogsOwner() {
     const el = document.getElementById('logs-owner');
-    if (!el) return;
+    let owner = { model: null, kind: null };
     try {
         const res = await fetch('/api/logs/owner');
-        const data = await res.json();
-        el.textContent = data.model ? `· ${data.model}` : '';
+        owner = await res.json();
     } catch (e) {
-        el.textContent = '';
+        // Leave it empty; the caller treats that as "nothing to show".
     }
+    const mine = owner.kind === activeSection;
+    if (el) el.textContent = (mine && owner.model) ? `· ${owner.model}` : '';
+    return { ...owner, mine };
 }
 
 async function fetchDevices() {
@@ -316,14 +319,23 @@ async function unloadModel() {
     currentLoadingModel = null;
 }
 
-async function applyContextChange() {
-    if (!lastStatus || !lastStatus.running || !lastStatus.model) {
-        return; // Nothing to do if stopped
+// Every control reloads the model to take effect, so each one must first ask
+// whether the running model is the one this tab is about. Otherwise changing
+// Output Size on the Image tab restarted a language model.
+function runningModelIsMine() {
+    return !!(lastStatus && lastStatus.running && lastStatus.model
+              && lastStatus.kind === activeSection);
+}
+
+function reloadCurrentModel() {
+    if (!runningModelIsMine()) {
+        return; // Nothing of ours is loaded: the setting waits for the next start
     }
-    
-    const currentModel = lastStatus.model;
-    const currentQuant = lastStatus.quantization;
-    loadModel(currentModel, currentQuant);
+    loadModel(lastStatus.model, lastStatus.quantization);
+}
+
+async function applyContextChange() {
+    reloadCurrentModel();
 }
 
 function renderPreserveThinkState(on) {
@@ -340,10 +352,7 @@ async function applyPreserveThinkChange() {
     renderPreserveThinkState(input && input.checked);
 
     // The flag is baked into the command line, so the model has to come back up.
-    if (!lastStatus || !lastStatus.running || !lastStatus.model) {
-        return; // Nothing loaded: the checkbox just waits for the next start
-    }
-    loadModel(lastStatus.model, lastStatus.quantization);
+    reloadCurrentModel();
 }
 
 // Host-side buffers are named after the backend that pinned them (Vulkan_Host,
@@ -410,41 +419,26 @@ function renderParallelHint() {
 }
 
 async function applyDevicesChange() {
-    if (!lastStatus || !lastStatus.running || !lastStatus.model) {
-        return; // Nothing loaded: the pick just waits for the next start
-    }
-    loadModel(lastStatus.model, lastStatus.quantization);
+    reloadCurrentModel();
 }
 
 async function applyParallelChange() {
-    if (!lastStatus || !lastStatus.running || !lastStatus.model) {
-        return; // Nothing loaded: the number just waits for the next start
-    }
-    loadModel(lastStatus.model, lastStatus.quantization);
+    reloadCurrentModel();
 }
 
 async function applyFramesChange() {
-    if (!lastStatus || !lastStatus.running || !lastStatus.model) {
-        return; // Nothing to do if stopped
-    }
-    loadModel(lastStatus.model, lastStatus.quantization);
+    reloadCurrentModel();
 }
 
 async function applyHiresChange() {
     const st = document.getElementById('hires-state');
     const input = document.getElementById('hires-input');
     if (st && input) st.innerText = input.checked ? 'On' : 'Off';
-    if (!lastStatus || !lastStatus.running || !lastStatus.model) {
-        return; // Nothing loaded: the toggle just waits for the next start
-    }
-    loadModel(lastStatus.model, lastStatus.quantization);
+    reloadCurrentModel();
 }
 
 async function applyResChange() {
-    if (!lastStatus || !lastStatus.running || !lastStatus.model) {
-        return; // Nothing loaded: the pick just waits for the next start
-    }
-    loadModel(lastStatus.model, lastStatus.quantization);
+    reloadCurrentModel();
 }
 
 async function stopServer() {
@@ -485,11 +479,13 @@ function startPolling() {
         try {
             const res = await fetch('/api/logs');
             const lines = await res.json();
-            fetchLogsOwner();
-            
+            // A log belongs to the section its process came from. Showing a
+            // language model's output under Image was plain wrong.
+            const owner = await fetchLogsOwner();
+
             const isAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 50;
-            
-            if (lines.length > 0) {
+
+            if (owner.mine && lines.length > 0) {
                 container.innerHTML = lines.map(l => `<div class="log-line">${escapeHtml(l)}</div>`).join('');
             } else {
                 container.innerHTML = '<div class="log-line">No logs yet...</div>';
@@ -524,11 +520,12 @@ function updateStatusDisplay(status) {
     renderParallelHint();
 
     const devicesInput = document.getElementById('devices-input');
-    if (devicesInput && document.activeElement !== devicesInput
-        && status.selected_devices !== undefined) {
+    if (devicesInput && document.activeElement !== devicesInput) {
+        const perKind = status.selected_devices || {};
+        const chosen = perKind[activeSection] || '';
         // Only when the option exists: the device list loads asynchronously.
-        if ([...devicesInput.options].some(o => o.value === status.selected_devices)) {
-            devicesInput.value = status.selected_devices;
+        if ([...devicesInput.options].some(o => o.value === chosen)) {
+            devicesInput.value = chosen;
         }
     }
 
@@ -844,6 +841,10 @@ async function copyLogs() {
     const btn = document.getElementById('copy-logs-btn');
     let ok = false;
     try {
+        const owner = await fetchLogsOwner();
+        if (!owner.mine) {
+            throw new Error('log belongs to another section');
+        }
         const res = await fetch('/api/logs');
         const text = (await res.json()).join('\n');
         // navigator.clipboard exists only on a secure origin, and the dashboard is
@@ -873,13 +874,18 @@ async function copyLogs() {
     }
 }
 
-function clearLogs() {
-    fetch('/api/logs/clear', { method: 'POST' })
-        .then(() => {
-            const container = document.getElementById('logs-container');
-            container.innerHTML = '<div class="log-line">Waiting for logs...</div>';
-        })
-        .catch(e => console.error('Failed to clear logs:', e));
+async function clearLogs() {
+    // Wiping another section's log from here would destroy the only record of a
+    // crash the user cannot even see on this tab.
+    const owner = await fetchLogsOwner();
+    if (!owner.mine) return;
+    try {
+        await fetch('/api/logs/clear', { method: 'POST' });
+        const container = document.getElementById('logs-container');
+        container.innerHTML = '<div class="log-line">Waiting for logs...</div>';
+    } catch (e) {
+        console.error('Failed to clear logs:', e);
+    }
 }
 
 // Touch support for mobile, plus ghost-click suppression.

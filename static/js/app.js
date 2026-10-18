@@ -206,7 +206,12 @@ function selectSection(name) {
     renderSectionTabs();
     renderModelList(currentConfig ? currentConfig.models || {} : {});
     applyDashboardKind(activeSection);
+    // Draw from the cached status first so the panel changes immediately, then
+    // ask the backend: everything here is per-section, and waiting out the 5s
+    // poll left the previous tab's answers on screen.
     if (lastStatus) updateStatusDisplay(lastStatus);
+    pollStatus();
+    refreshLogs();
 }
 
 function renderModelList(models) {
@@ -500,35 +505,39 @@ async function pollStatus() {
     }
 }
 
+async function refreshLogs() {
+    const container = document.getElementById('logs-container');
+    if (!container) return;
+    try {
+        const res = await fetch('/api/logs');
+        const lines = await res.json();
+        // A log belongs to the section its process came from. Showing a
+        // language model's output under Image was plain wrong.
+        const owner = await fetchLogsOwner();
+
+        const isAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 50;
+
+        if (owner.mine && lines.length > 0) {
+            container.innerHTML = lines.map(l => `<div class="log-line">${escapeHtml(l)}</div>`).join('');
+        } else {
+            container.innerHTML = '<div class="log-line">No logs yet...</div>';
+        }
+
+        if (isAtBottom) {
+            container.scrollTop = container.scrollHeight;
+        }
+    } catch (e) {
+        // Ignore
+    }
+}
+
 function startPolling() {
     // Run once right away so the context field shows the remembered value.
     pollStatus();
     setInterval(pollStatus, 5000);
 
-    setInterval(async () => {
-        const container = document.getElementById('logs-container');
-        try {
-            const res = await fetch('/api/logs');
-            const lines = await res.json();
-            // A log belongs to the section its process came from. Showing a
-            // language model's output under Image was plain wrong.
-            const owner = await fetchLogsOwner();
-
-            const isAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 50;
-
-            if (owner.mine && lines.length > 0) {
-                container.innerHTML = lines.map(l => `<div class="log-line">${escapeHtml(l)}</div>`).join('');
-            } else {
-                container.innerHTML = '<div class="log-line">No logs yet...</div>';
-            }
-
-            if (isAtBottom) {
-                container.scrollTop = container.scrollHeight;
-            }
-        } catch (e) {
-            // Ignore
-        }
-    }, 5000);
+    refreshLogs();
+    setInterval(refreshLogs, 5000);
 }
 
 function updateStatusDisplay(status) {

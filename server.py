@@ -292,6 +292,7 @@ class Instance:
         self.frames = 0
         self.res = ""
         self.hires = False
+        self.preserve_think = False
         self.stats = _new_stats()
         self.logs = deque(maxlen=2000)
 
@@ -318,6 +319,7 @@ class Instance:
             "frames": self.frames,
             "res": self.res,
             "hires": self.hires,
+            "preserve_think": self.preserve_think,
             "stats": self.stats,
         }
 
@@ -1116,6 +1118,7 @@ def _start_model_server(
         inst.frames = frames if kind == "tts" else 0
         inst.res = res if kind == "sd" else ""
         inst.hires = hires if kind == "sd" else False
+        inst.preserve_think = preserve_think if kind == "llm" else False
 
         state.selected_devices[kind] = devices
         if kind == "llm":

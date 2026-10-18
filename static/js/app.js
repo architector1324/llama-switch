@@ -247,6 +247,7 @@ function renderSectionTabs() {
 
 function selectSection(name) {
     activeSection = name;
+    resetControlPristine();
     localStorage.setItem('activeSection', name);
     renderSectionTabs();
     renderModelList(currentConfig ? currentConfig.models || {} : {});
@@ -328,9 +329,20 @@ function renderModelGroup(list, models, modelKeys, sectionName) {
     });
 }
 
+// Fields describe the model in focus, so a different focus must refill them
+// even though the user typed in them for the previous one.
+function resetControlPristine() {
+    ctxInputPristine = true;
+    parallelInputPristine = true;
+    framesInputPristine = true;
+    preserveInputPristine = true;
+    devicesInputPristine = true;
+}
+
 function focusModel(key) {
     if (!instances.some(i => i.model === key)) return;
     focusedModel = key;
+    resetControlPristine();
     if (lastStatus) updateStatusDisplay(lastStatus);
     updateActiveModel(lastStatus || {});
     refreshLogs();
@@ -636,24 +648,27 @@ function updateStatusDisplay(status) {
         renderMultiState(multiInput.checked);
     }
 
-    // Mirror the server's remembered ctx so a reload keeps the chosen value.
-    if (ctxInputPristine && status.selected_ctx) {
+    // What the controls describe: the instance in focus, or -- with nothing of
+    // this kind running -- the sticky choice for the next start.
+    const shownCtx = inst && inst.ctx ? inst.ctx : status.selected_ctx;
+    if (ctxInputPristine && shownCtx) {
         const ctxInput = document.getElementById('ctx-input');
         if (ctxInput && document.activeElement !== ctxInput) {
-            ctxInput.value = status.selected_ctx;
+            ctxInput.value = shownCtx;
         }
     }
 
-    if (parallelInputPristine && status.selected_parallel) {
+    const shownParallel = inst && inst.parallel ? inst.parallel : status.selected_parallel;
+    if (parallelInputPristine && shownParallel) {
         const parallelInput = document.getElementById('parallel-input');
         if (parallelInput && document.activeElement !== parallelInput) {
-            parallelInput.value = status.selected_parallel;
+            parallelInput.value = shownParallel;
         }
     }
     renderParallelHint();
 
     const perKind = status.selected_devices || {};
-    const chosen = perKind[activeSection] || '';
+    const chosen = inst ? (inst.devices || '') : (perKind[activeSection] || '');
     const devicesInput = document.getElementById('devices-input');
     if (devicesInputPristine && devicesInput && document.activeElement !== devicesInput
         && activeSection !== 'sd') {
@@ -682,30 +697,34 @@ function updateStatusDisplay(status) {
     // status still carries the old value until the new process is up.
     if (preserveInputPristine && !currentLoadingModel) {
         const preserveInput = document.getElementById('preserve-think-input');
+        const shownPreserve = inst ? !!inst.preserve_think : !!status.selected_preserve_think;
         if (preserveInput && document.activeElement !== preserveInput) {
-            preserveInput.checked = !!status.selected_preserve_think;
+            preserveInput.checked = shownPreserve;
             renderPreserveThinkState(preserveInput.checked);
         }
     }
 
     const hiresInput = document.getElementById('hires-input');
+    const shownHires = inst ? !!inst.hires : !!status.selected_hires;
     if (hiresInput && document.activeElement !== hiresInput) {
-        hiresInput.checked = !!status.selected_hires;
+        hiresInput.checked = shownHires;
         const hiresState = document.getElementById('hires-state');
-        if (hiresState) hiresState.innerText = status.selected_hires ? 'On' : 'Off';
+        if (hiresState) hiresState.innerText = shownHires ? 'On' : 'Off';
     }
 
-    if (status.selected_res) {
+    const shownRes = (inst && inst.res) ? inst.res : status.selected_res;
+    if (shownRes) {
         const resInput = document.getElementById('res-input');
         if (resInput && document.activeElement !== resInput) {
-            resInput.value = status.selected_res;
+            resInput.value = shownRes;
         }
     }
 
-    if (framesInputPristine && status.selected_frames) {
+    const shownFrames = (inst && inst.frames) ? inst.frames : status.selected_frames;
+    if (framesInputPristine && shownFrames) {
         const framesInput = document.getElementById('frames-input');
         if (framesInput && document.activeElement !== framesInput) {
-            framesInput.value = status.selected_frames;
+            framesInput.value = shownFrames;
         }
     }
 

@@ -1614,8 +1614,10 @@ async def _proxy_to_current(
     path: str,
     kind: str = "sd",
     rewrite: Optional[Callable] = None,
+    raw_body: Optional[bytes] = None,
 ):
-    raw_body = await request.body()
+    if raw_body is None:
+        raw_body = await request.body()
 
     requested_model = _model_from_body(
         raw_body, request.headers.get("content-type", "")
@@ -1891,13 +1893,80 @@ async def _clean_chat(chunks, content_type: str):
 async def proxy_audio(request: Request, path: str):
     head = path.split("/", 1)[0]
     is_asr = head in AUDIO_LLM_ENDPOINTS
-    kind = _asr_kind(await request.body(), request.headers.get("content-type", "")) if is_asr else "tts"
+    content_type = request.headers.get("content-type", "")
+    raw_body = await request.body()
+    kind = _asr_kind(raw_body, content_type) if is_asr else "tts"
+    if kind == "stt":
+        raw_body = await _wav_multipart(raw_body, content_type)
     return await _proxy_to_current(
         request,
         f"v1/audio/{path}",
         kind=kind,
         rewrite=_clean_transcription if is_asr else None,
+        raw_body=raw_body,
     )
+
+
+async def _wav_multipart(raw_body: bytes, content_type: str) -> bytes:
+    """The upload's file part as WAV: audio.cpp transcribes WAV only.
+
+    Open WebUI sends mp3 and browsers record webm, so anything that is not RIFF
+    goes through ffmpeg. Temp files both ways: mp4/m4a keep their index at the end,
+    and ffmpeg cannot seek a pipe to find it.
+    """
+    match = _BOUNDARY_RE.search(content_type)
+    if not match:
+        return raw_body
+
+    delimiter = b"--" + (match.group(1) or match.group(2)).encode("utf-8", "replace")
+    pos = 0
+    while True:
+        start = raw_body.find(delimiter, pos)
+        if start < 0:
+            return raw_body
+        head_start = start + len(delimiter)
+        head_end = raw_body.find(b"\r\n\r\n", head_start)
+        if head_end < 0:
+            return raw_body
+        pos = head_end + 4
+        head = raw_body[head_start:head_end]
+        if b"filename=" in head.lower():
+            break
+
+    data_end = raw_body.find(b"\r\n" + delimiter, pos)
+    if data_end < 0:
+        return raw_body
+    data = raw_body[pos:data_end]
+    if data[:4] == b"RIFF":
+        return raw_body
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        src = os.path.join(tmp, "in")
+        dst = os.path.join(tmp, "out.wav")
+        with open(src, "wb") as fh:
+            fh.write(data)
+        # A file, not pipe:1: piped WAV has no sizes in its header, and audio.cpp
+        # rejects that ("failed to read WAV data chunk").
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-loglevel", "error", "-i", src,
+            "-ac", "1", "-ar", "16000", dst,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+        )
+        _, err = await proc.communicate()
+        wav = b""
+        if proc.returncode == 0 and os.path.exists(dst):
+            with open(dst, "rb") as fh:
+                wav = fh.read()
+    if proc.returncode != 0 or not wav:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not convert the upload to WAV: {err.decode(errors='replace').strip()}",
+        )
+
+    head = re.sub(rb'filename="[^"]*"', b'filename="audio.wav"', head)
+    head = re.sub(rb"(?im)^content-type:.*$", b"Content-Type: audio/wav", head)
+    return raw_body[:head_start] + head + b"\r\n\r\n" + wav + raw_body[data_end:]
 
 
 def _asr_kind(raw_body: bytes, content_type: str) -> str:

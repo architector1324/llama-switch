@@ -282,7 +282,12 @@ class ServiceState:
         self.selected_hires: bool = False
         self.host: str = "0.0.0.0"
         self.ready: bool = False
+        # One buffer per launched process, not one for the service. A backend
+        # prints its memory breakdown as it dies, and those lines sitting above a
+        # fresh model's output read as that model's -- which fooled both of us.
         self.logs = deque(maxlen=2000)
+        # What the current buffer belongs to, so the panel can say whose log it is.
+        self.logs_model: Optional[str] = None
         self.lock = threading.Lock()
         self.config_mgr: Optional[ConfigManager] = None
         self.stats = {
@@ -1052,6 +1057,14 @@ def _start_model_server(
             state.current_port = port
             state.current_kind = kind
 
+            # A fresh buffer for this process. The previous reader thread keeps
+            # appending to the old deque, which nothing points at any more, so
+            # the two never mix.
+            state.logs = deque(maxlen=2000)
+            state.logs_model = (
+                f"{model_key}:{actual_quant}" if actual_quant else model_key
+            )
+
             t = threading.Thread(
                 target=log_reader, args=(state.process, state.logs), daemon=True
             )
@@ -1221,8 +1234,14 @@ def get_devices():
 
 @app.get("/api/logs")
 def get_logs():
+    # Kept after the process exits: a crash is read from the log it left behind.
     return list(state.logs)
 
+
+@app.get("/api/logs/owner")
+def get_logs_owner():
+    """Which model produced the log currently being served."""
+    return {"model": state.logs_model}
 
 
 @app.post("/api/logs/clear")

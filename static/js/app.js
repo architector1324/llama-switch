@@ -80,6 +80,20 @@ let preserveInputPristine = true;
 
 // Two identical cards are told apart only by index and bus address, so both go
 // in the label. "All" stays the default: the backend spreads the model itself.
+// The log belongs to one launched process; say which, so lines left by a model
+// that has since exited are not read as the current one's.
+async function fetchLogsOwner() {
+    const el = document.getElementById('logs-owner');
+    if (!el) return;
+    try {
+        const res = await fetch('/api/logs/owner');
+        const data = await res.json();
+        el.textContent = data.model ? `· ${data.model}` : '';
+    } catch (e) {
+        el.textContent = '';
+    }
+}
+
 async function fetchDevices() {
     const sel = document.getElementById('devices-input');
     if (!sel) return;
@@ -471,6 +485,7 @@ function startPolling() {
         try {
             const res = await fetch('/api/logs');
             const lines = await res.json();
+            fetchLogsOwner();
             
             const isAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 50;
             

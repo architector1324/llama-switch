@@ -557,6 +557,15 @@ body {
     margin-top: 4px;
 }
 
+/* Whose log the panel is showing, next to its title. */
+.panel-subject {
+    margin-left: 8px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: normal;
+    color: var(--text-muted);
+}
+
 input[type="number"] {
     background: var(--bg-input);
     border: 1px solid var(--border);

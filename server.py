@@ -140,7 +140,8 @@ KIND_ENDPOINT = {
     "llm": "/v1/chat/completions",
     "sd": "/v1/images/generations",
     "tts": "/v1/audio/speech",
-    "music": "/v1/audio/speech",
+    # audio.cpp generates music through its own task endpoint; /v1/audio/* is tts.
+    "music": "/v1/tasks/",
     "decision": "/v1/systemone",
 }
 

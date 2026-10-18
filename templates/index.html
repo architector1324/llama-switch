@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Llama Switch</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=16">
+    <link rel="stylesheet" href="/static/css/style.css?v=17">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body class="dark-theme">
@@ -161,6 +161,30 @@
                                 </div>
                             </div>
 
+                            <div class="control-group compact-group" id="sd-devices-control" style="display: none;">
+                                <label title="Image pipelines are split across modules, and each one can sit on a different card. Leave a row on Profile to keep what the profile says. Applied when the model loads.">GPU per module</label>
+                                <div class="sd-device-rows">
+                                    <div class="sd-device-row">
+                                        <span class="sd-device-role">Diffusion</span>
+                                        <select id="sd-dev-diffusion" class="res-select" onchange="applyDevicesChange()">
+                                            <option value="">Profile</option>
+                                        </select>
+                                    </div>
+                                    <div class="sd-device-row">
+                                        <span class="sd-device-role">Text encoder</span>
+                                        <select id="sd-dev-te" class="res-select" onchange="applyDevicesChange()">
+                                            <option value="">Profile</option>
+                                        </select>
+                                    </div>
+                                    <div class="sd-device-row">
+                                        <span class="sd-device-role">VAE</span>
+                                        <select id="sd-dev-vae" class="res-select" onchange="applyDevicesChange()">
+                                            <option value="">Profile</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+
                             <div class="control-group compact-group" id="ctx-control">
                                 <label for="ctx-input">Context Window</label>
                                 <div class="input-wrapper">
@@ -264,6 +288,6 @@
             </section>
         </main>
     </div>
-    <script src="/static/js/app.js?v=30"></script>
+    <script src="/static/js/app.js?v=31"></script>
 </body>
 </html>

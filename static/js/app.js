@@ -97,23 +97,55 @@ async function fetchLogsOwner() {
     return { ...owner, mine };
 }
 
+// Image pipelines are split across modules; sd-server takes a card per module.
+const SD_DEVICE_ROLES = [['diffusion', 'sd-dev-diffusion'],
+                         ['te', 'sd-dev-te'],
+                         ['vae', 'sd-dev-vae']];
+
 async function fetchDevices() {
     const sel = document.getElementById('devices-input');
-    if (!sel) return;
     try {
         const res = await fetch('/api/devices');
         const data = await res.json();
         const devices = data.devices || [];
-        const chosen = sel.value;
-        sel.innerHTML = '<option value="">All GPUs</option>' + devices.map(d => {
+        const options = devices.map(d => {
             const gib = (d.total_mib / 1024).toFixed(0);
             const where = d.pci ? ` \u00b7 ${d.pci}` : '';
             return `<option value="${d.id}">${d.id} \u00b7 ${gib} GiB${where}</option>`;
         }).join('');
-        sel.value = chosen;
+
+        if (sel) {
+            const chosen = sel.value;
+            sel.innerHTML = '<option value="">All GPUs</option>' + options;
+            sel.value = chosen;
+        }
+        // "Profile" leaves the role where the profile put it, rather than
+        // forcing every module onto one card.
+        for (const [, id] of SD_DEVICE_ROLES) {
+            const roleSel = document.getElementById(id);
+            if (!roleSel) continue;
+            const chosen = roleSel.value;
+            roleSel.innerHTML = '<option value="">Profile</option>' + options;
+            roleSel.value = chosen;
+        }
     } catch (e) {
         console.error('Failed to load devices', e);
     }
+}
+
+// What goes to the server: a per-role assignment on the image tab, a plain
+// device name everywhere else.
+function selectedDevices() {
+    if (activeSection === 'sd') {
+        const parts = [];
+        for (const [role, id] of SD_DEVICE_ROLES) {
+            const el = document.getElementById(id);
+            if (el && el.value) parts.push(`${role}=${el.value}`);
+        }
+        return parts.join(',');
+    }
+    const el = document.getElementById('devices-input');
+    return el ? el.value : '';
 }
 
 async function fetchConfig() {
@@ -270,8 +302,7 @@ function handleQuantChange(key) {
 async function loadModel(key, quantization = null) {
     const ctxInput = document.getElementById('ctx-input');
     const ctx = parseInt(ctxInput.value) || 4096;
-    const devicesInput = document.getElementById('devices-input');
-    const devices = devicesInput ? devicesInput.value : '';
+    const devices = selectedDevices();
     // Slots share that one context window, so the server needs both together.
     const parallelInput = document.getElementById('parallel-input');
     const parallel = parseInt(parallelInput ? parallelInput.value : '1') || 1;
@@ -519,13 +550,28 @@ function updateStatusDisplay(status) {
     }
     renderParallelHint();
 
+    const perKind = status.selected_devices || {};
+    const chosen = perKind[activeSection] || '';
     const devicesInput = document.getElementById('devices-input');
-    if (devicesInput && document.activeElement !== devicesInput) {
-        const perKind = status.selected_devices || {};
-        const chosen = perKind[activeSection] || '';
+    if (devicesInput && document.activeElement !== devicesInput
+        && activeSection !== 'sd') {
         // Only when the option exists: the device list loads asynchronously.
         if ([...devicesInput.options].some(o => o.value === chosen)) {
             devicesInput.value = chosen;
+        }
+    }
+    if (activeSection === 'sd') {
+        const assigned = Object.fromEntries(
+            chosen.split(',').filter(Boolean).map(p => {
+                const [role, dev] = p.split('=');
+                return [role, dev || ''];
+            })
+        );
+        for (const [role, id] of SD_DEVICE_ROLES) {
+            const el = document.getElementById(id);
+            if (!el || document.activeElement === el) continue;
+            const want = assigned[role] || '';
+            if ([...el.options].some(o => o.value === want)) el.value = want;
         }
     }
 
@@ -751,6 +797,7 @@ function applyDashboardKind(kind) {
     const hiresControl = document.getElementById('hires-control');
     const parallelControl = document.getElementById('parallel-control');
     const devicesControl = document.getElementById('devices-control');
+    const sdDevicesControl = document.getElementById('sd-devices-control');
     const preserveControl = document.getElementById('preserve-think-control');
 
     if (llmStats) llmStats.style.display = notLlm ? 'none' : '';
@@ -762,8 +809,10 @@ function applyDashboardKind(kind) {
     if (ctxControl) ctxControl.style.display = (notLlm && !isDecision) ? 'none' : '';
     if (parallelControl) parallelControl.style.display = (notLlm && !isDecision) ? 'none' : '';
     // Every backend takes a device: -dev for llama.cpp, --backend role=dev for
-    // sd, --backend vulkan --device N for audiocpp.
-    if (devicesControl) devicesControl.style.display = '';
+    // sd, --backend vulkan --device N for audiocpp. Image models get one row per
+    // module instead of a single picker.
+    if (devicesControl) devicesControl.style.display = isSd ? 'none' : '';
+    if (sdDevicesControl) sdDevicesControl.style.display = isSd ? '' : 'none';
     if (framesControl) framesControl.style.display = isTts ? '' : 'none';
     if (resControl) resControl.style.display = isSd ? '' : 'none';
     if (hiresControl) hiresControl.style.display = isSd ? '' : 'none';

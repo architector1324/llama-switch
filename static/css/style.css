@@ -557,6 +557,31 @@ body {
     margin-top: 4px;
 }
 
+/* One row per pipeline module, so each can name its own card. */
+.sd-device-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.sd-device-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.sd-device-role {
+    flex: 0 0 90px;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.sd-device-row .res-select {
+    flex: 1 1 auto;
+    font-size: 12px;
+    padding: 5px 8px;
+}
+
 /* Whose log the panel is showing, next to its title. */
 .panel-subject {
     margin-left: 8px;

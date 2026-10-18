@@ -781,13 +781,24 @@ def _device_flags(devices: str, kind: str, default_text: str) -> str:
         return f"-dev {devices}"
 
     if kind == "sd":
-        # sd-server assigns per module. Which modules exist differs per pipeline,
-        # so take the role names from the profile's own default and point them all
-        # at the chosen card.
-        roles = re.findall(r"([A-Za-z_]+)=", default_text)
-        if roles:
-            return "--backend " + ",".join(f"{r}={devices}" for r in roles)
-        return f"--backend {devices}"
+        # sd-server assigns per module, and which modules exist differs per
+        # pipeline, so the roles come from the profile's own default. A selection
+        # may name roles ("diffusion=Vulkan1,vae=Vulkan0") and then overrides only
+        # those, leaving the rest as the profile had them; a bare device name
+        # moves every role to that card.
+        assigned = dict(re.findall(r"([A-Za-z_]+)=([^,\s]+)", default_text))
+        if "=" in devices:
+            for part in devices.split(","):
+                role, _, dev = part.partition("=")
+                role, dev = role.strip(), dev.strip()
+                if role and dev:
+                    assigned[role] = dev
+        else:
+            for role in assigned:
+                assigned[role] = devices
+        if not assigned:
+            return f"--backend {devices}"
+        return "--backend " + ",".join(f"{r}={d}" for r, d in assigned.items())
 
     # audiocpp-server takes a backend name plus an index within it.
     m = RE_DEVICE_SPLIT.match(devices)
@@ -971,7 +982,11 @@ def _start_model_server(
     if devices:
         known = {d["id"] for d in list_devices()}
         picked = [p.strip() for p in devices.split(",") if p.strip()]
-        unknown = [p for p in picked if p not in known]
+        # Entries are either a device or "role=device" (sd assigns per module).
+        unknown = [
+            p for p in picked if p.partition("=")[2].strip() not in known
+            and p not in known
+        ]
         if unknown:
             raise ValueError(
                 f"Unknown device(s): {', '.join(unknown)}; "

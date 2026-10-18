@@ -543,14 +543,18 @@ body {
     color: var(--primary);
 }
 
-/* Sits under an input to spell out what the chosen number works out to. */
+/* Sits under an input to spell out what the chosen number works out to. Empty
+   most of the time, so it must not reserve height -- that read as a stray gap
+   between control groups. */
 .control-hint {
     display: block;
-    margin-top: 4px;
     font-family: var(--font-mono);
     font-size: 12px;
     color: var(--text-muted);
-    min-height: 14px;
+}
+
+.control-hint:not(:empty) {
+    margin-top: 4px;
 }
 
 input[type="number"] {

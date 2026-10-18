@@ -78,6 +78,27 @@ let framesInputPristine = true;
 let parallelInputPristine = true;
 let preserveInputPristine = true;
 
+// Two identical cards are told apart only by index and bus address, so both go
+// in the label. "All" stays the default: the backend spreads the model itself.
+async function fetchDevices() {
+    const sel = document.getElementById('devices-input');
+    if (!sel) return;
+    try {
+        const res = await fetch('/api/devices');
+        const data = await res.json();
+        const devices = data.devices || [];
+        const chosen = sel.value;
+        sel.innerHTML = '<option value="">All GPUs</option>' + devices.map(d => {
+            const gib = (d.total_mib / 1024).toFixed(0);
+            const where = d.pci ? ` \u00b7 ${d.pci}` : '';
+            return `<option value="${d.id}">${d.id} \u00b7 ${gib} GiB${where}</option>`;
+        }).join('');
+        sel.value = chosen;
+    } catch (e) {
+        console.error('Failed to load devices', e);
+    }
+}
+
 async function fetchConfig() {
     try {
         const res = await fetch('/api/config');
@@ -105,6 +126,7 @@ async function fetchConfig() {
         renderSectionTabs();
         renderModelList(data.models || {});
         applyDashboardKind(activeSection);
+        await fetchDevices();
     } catch (e) {
         console.error("Failed to load config", e);
         document.getElementById('model-list').innerHTML = '<div class="model-item">Error loading config</div>';
@@ -231,6 +253,8 @@ function handleQuantChange(key) {
 async function loadModel(key, quantization = null) {
     const ctxInput = document.getElementById('ctx-input');
     const ctx = parseInt(ctxInput.value) || 4096;
+    const devicesInput = document.getElementById('devices-input');
+    const devices = devicesInput ? devicesInput.value : '';
     // Slots share that one context window, so the server needs both together.
     const parallelInput = document.getElementById('parallel-input');
     const parallel = parseInt(parallelInput ? parallelInput.value : '1') || 1;
@@ -257,7 +281,7 @@ async function loadModel(key, quantization = null) {
         const res = await fetch('/api/start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model_key: key, quantization: quantization, ctx: ctx, parallel: parallel, frames: frames, res: outputRes, hires: hires, preserve_think: preserveThink })
+            body: JSON.stringify({ model_key: key, quantization: quantization, ctx: ctx, parallel: parallel, devices: devices, frames: frames, res: outputRes, hires: hires, preserve_think: preserveThink })
         });
         
         if (!res.ok) {
@@ -371,6 +395,13 @@ function renderParallelHint() {
     hint.textContent = (n > 1 && ctx) ? `${n} \u00d7 ${ctx} = ${n * ctx} ctx total` : '';
 }
 
+async function applyDevicesChange() {
+    if (!lastStatus || !lastStatus.running || !lastStatus.model) {
+        return; // Nothing loaded: the pick just waits for the next start
+    }
+    loadModel(lastStatus.model, lastStatus.quantization);
+}
+
 async function applyParallelChange() {
     if (!lastStatus || !lastStatus.running || !lastStatus.model) {
         return; // Nothing loaded: the number just waits for the next start
@@ -476,6 +507,15 @@ function updateStatusDisplay(status) {
         }
     }
     renderParallelHint();
+
+    const devicesInput = document.getElementById('devices-input');
+    if (devicesInput && document.activeElement !== devicesInput
+        && status.selected_devices !== undefined) {
+        // Only when the option exists: the device list loads asynchronously.
+        if ([...devicesInput.options].some(o => o.value === status.selected_devices)) {
+            devicesInput.value = status.selected_devices;
+        }
+    }
 
     // Mirror the server's remembered choice, except while a load is in flight:
     // status still carries the old value until the new process is up.
@@ -635,6 +675,7 @@ function updateStatusDisplay(status) {
         } else {
             webuiBtn.style.display = 'none';
         }
+
         
     } else {
         indicator.classList.remove('on');
@@ -685,6 +726,7 @@ function applyDashboardKind(kind) {
     const resControl = document.getElementById('res-control');
     const hiresControl = document.getElementById('hires-control');
     const parallelControl = document.getElementById('parallel-control');
+    const devicesControl = document.getElementById('devices-control');
     const preserveControl = document.getElementById('preserve-think-control');
 
     if (llmStats) llmStats.style.display = notLlm ? 'none' : '';
@@ -695,6 +737,9 @@ function applyDashboardKind(kind) {
     if (decStats) decStats.style.display = isDecision ? '' : 'none';
     if (ctxControl) ctxControl.style.display = (notLlm && !isDecision) ? 'none' : '';
     if (parallelControl) parallelControl.style.display = (notLlm && !isDecision) ? 'none' : '';
+    // Every backend takes a device: -dev for llama.cpp, --backend role=dev for
+    // sd, --backend vulkan --device N for audiocpp.
+    if (devicesControl) devicesControl.style.display = '';
     if (framesControl) framesControl.style.display = isTts ? '' : 'none';
     if (resControl) resControl.style.display = isSd ? '' : 'none';
     if (hiresControl) hiresControl.style.display = isSd ? '' : 'none';

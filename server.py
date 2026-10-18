@@ -52,6 +52,76 @@ def find_free_port():
         return s.getsockname()[1]
 
 
+#   Vulkan0: AMD Radeon RX 9060 XT (RADV GFX1200) (16304 MiB, 15586 MiB free)
+RE_DEVICE = re.compile(
+    r"^\s*(\S+):\s*(.+?)\s*\((\d+)\s*MiB,\s*(\d+)\s*MiB free\)\s*$"
+)
+
+# vulkaninfo encodes the PCI address in deviceUUID: 00000000-0600-... is bus 0x06.
+RE_VK_UUID = re.compile(r"deviceUUID\s*=\s*[0-9a-f]{8}-([0-9a-f]{2})([0-9a-f]{2})-")
+
+_devices_cache: Optional[List[Dict]] = None
+
+
+def _device_pci_addresses() -> List[str]:
+    """PCI address per Vulkan device, in the order Vulkan enumerates them.
+
+    Two identical cards are indistinguishable by name, so the bus address is the
+    only thing that says which is which. Best-effort: no vulkaninfo, no addresses.
+    """
+    try:
+        out = subprocess.run(
+            ["vulkaninfo", "--summary"],
+            capture_output=True, text=True, timeout=15,
+        ).stdout
+    except Exception:
+        return []
+    return [
+        f"0000:{bus}:{dev}.0" for bus, dev in RE_VK_UUID.findall(out)
+    ]
+
+
+def list_devices(refresh: bool = False) -> List[Dict]:
+    """Offload devices as the backend itself enumerates them.
+
+    Asking llama-server keeps the list in step with whatever backend the build
+    carries -- Vulkan here, CUDA elsewhere -- instead of hardcoding one vendor.
+    """
+    global _devices_cache
+    if _devices_cache is not None and not refresh:
+        return _devices_cache
+
+    devices: List[Dict] = []
+    try:
+        out = subprocess.run(
+            ["llama-server", "--list-devices"],
+            capture_output=True, text=True, timeout=60,
+        ).stdout
+        for line in out.splitlines():
+            m = RE_DEVICE.match(line)
+            if m:
+                devices.append(
+                    {
+                        "id": m.group(1),
+                        "name": m.group(2),
+                        "total_mib": int(m.group(3)),
+                        "free_mib": int(m.group(4)),
+                        "pci": None,
+                    }
+                )
+    except Exception as e:
+        print(f"[Service] Could not list devices: {e}")
+        return []
+
+    pci = _device_pci_addresses()
+    if len(pci) == len(devices):
+        for dev, addr in zip(devices, pci):
+            dev["pci"] = addr
+
+    _devices_cache = devices
+    return devices
+
+
 # --- Config Manager ---
 SECTIONS = ("llm", "sd", "tts", "music", "decision")
 
@@ -196,6 +266,11 @@ class ServiceState:
         # N times as much KV -- more slots cost memory, not context.
         self.default_parallel: int = 1
         self.selected_parallel: int = 0
+        # Which offload devices a model may use, comma-separated as the backend
+        # names them ("Vulkan0"); empty means every device, the old behaviour.
+        # Sticky like selected_ctx.
+        self.selected_devices: str = ""
+        self.current_devices: str = ""
         # Frame cap for tts, apart from ctx: 2048 frames at 12.5/s is about 164 s.
         self.default_frames: int = 2048
         self.selected_frames: int = 0
@@ -256,6 +331,7 @@ def _stop_process_unsafe():
         state.current_model = None
         state.current_quant = None
         state.current_parallel = 0
+        state.current_devices = ""
         state.current_port = 0
         state.current_kind = None
         state.ready = False
@@ -675,6 +751,42 @@ RE_RES = re.compile(r"^(\d{2,5})x(\d{2,5})$")
 # On, the flags go in verbatim; off, the whole placeholder disappears.
 RE_HIRES = re.compile(r"\$\{HIRES:([^}]*)\}")
 
+# ${DEVICES} or ${DEVICES:<flags the profile uses by default>}. Every backend
+# spells device selection differently, so the flags are built per kind rather
+# than written into the profiles.
+RE_DEVICES = re.compile(r"\$\{DEVICES(?::([^}]*))?\}")
+
+# "Vulkan1" -> ("vulkan", 1), for backends that take a name and an index.
+RE_DEVICE_SPLIT = re.compile(r"^([A-Za-z_]+)(\d+)$")
+
+
+def _device_flags(devices: str, kind: str, default_text: str) -> str:
+    """Device-selection flags for one backend family.
+
+    Empty selection keeps whatever the profile already said, so "all" is exactly
+    today's behaviour rather than a guess at it.
+    """
+    if not devices:
+        return default_text
+
+    if kind in ("llm", "decision"):
+        return f"-dev {devices}"
+
+    if kind == "sd":
+        # sd-server assigns per module. Which modules exist differs per pipeline,
+        # so take the role names from the profile's own default and point them all
+        # at the chosen card.
+        roles = re.findall(r"([A-Za-z_]+)=", default_text)
+        if roles:
+            return "--backend " + ",".join(f"{r}={devices}" for r in roles)
+        return f"--backend {devices}"
+
+    # audiocpp-server takes a backend name plus an index within it.
+    m = RE_DEVICE_SPLIT.match(devices)
+    if m:
+        return f"--backend {m.group(1).lower()} --device {m.group(2)}"
+    return default_text
+
 
 # --- API Models ---
 class StartRequest(BaseModel):
@@ -686,6 +798,7 @@ class StartRequest(BaseModel):
     hires: Optional[bool] = None
     preserve_think: Optional[bool] = None
     parallel: Optional[int] = None
+    devices: Optional[str] = None
 
 
 # --- Internal Start Logic ---
@@ -775,6 +888,7 @@ def _start_model_server(
     hires: Optional[bool] = None,
     preserve_think: Optional[bool] = None,
     parallel: Optional[int] = None,
+    devices: Optional[str] = None,
 ) -> Dict:
     if not state.config_mgr:
         raise RuntimeError("Config not initialized")
@@ -840,6 +954,23 @@ def _start_model_server(
     if not 1 <= parallel <= 64:
         raise ValueError(f"Parallel slots must be 1..64, got {parallel}")
 
+    # Same precedence as ctx. Whitelisted against what the backend reports, both
+    # because a typo would fail obscurely at launch and because this string is
+    # pasted into a shell command line.
+    if devices is None:
+        devices = state.selected_devices
+    devices = (devices or "").strip()
+    if devices:
+        known = {d["id"] for d in list_devices()}
+        picked = [p.strip() for p in devices.split(",") if p.strip()]
+        unknown = [p for p in picked if p not in known]
+        if unknown:
+            raise ValueError(
+                f"Unknown device(s): {', '.join(unknown)}; "
+                f"available: {', '.join(sorted(known)) or 'none'}"
+            )
+        devices = ",".join(picked)
+
     # -c is the whole KV pool and llama.cpp hands each slot an equal share of it, so
     # the window the user asked for is per slot and the pool has to be N times it.
     ctx_total = ctx * parallel
@@ -856,6 +987,11 @@ def _start_model_server(
     cmd_str = cmd_str.replace("${HOST}", state.host)
     cmd_str = cmd_str.replace("${PRESERVE_THINK}", preserve_flag)
     cmd_str = cmd_str.replace("${PARALLEL}", str(parallel))
+    # The draft model follows --device unless told otherwise, so llm needs no
+    # second flag for it.
+    cmd_str = RE_DEVICES.sub(
+        lambda m: _device_flags(devices, kind, m.group(1) or ""), cmd_str
+    )
     # Bare forms, for configs written without the braces.
     cmd_str = cmd_str.replace("$PORT", str(port))
     cmd_str = cmd_str.replace("$CTX", str(ctx_total))
@@ -899,6 +1035,8 @@ def _start_model_server(
             state.current_ctx = ctx if kind in ("llm", "decision") else 0
             # Only llama-server takes --parallel; sd and tts have no slots.
             state.current_parallel = parallel if kind in ("llm", "decision") else 0
+            state.current_devices = devices
+            state.selected_devices = devices
             if kind == "llm":
                 state.selected_ctx = ctx
                 state.selected_preserve_think = preserve_think
@@ -1059,6 +1197,8 @@ def get_status():
             "selected_ctx": state.selected_ctx or state.default_ctx,
             "parallel": state.current_parallel,
             "selected_parallel": state.selected_parallel or state.default_parallel,
+            "devices": state.current_devices,
+            "selected_devices": state.selected_devices,
             "selected_preserve_think": state.selected_preserve_think,
             "frames": state.current_frames,
             "selected_frames": state.selected_frames or state.default_frames,
@@ -1073,9 +1213,16 @@ def get_status():
         }
 
 
+@app.get("/api/devices")
+def get_devices():
+    """Offload devices the backend reports, for the dashboard's picker."""
+    return {"devices": list_devices(refresh=True)}
+
+
 @app.get("/api/logs")
 def get_logs():
     return list(state.logs)
+
 
 
 @app.post("/api/logs/clear")
@@ -1104,6 +1251,7 @@ def start_server(req: StartRequest):
             req.hires,
             req.preserve_think,
             req.parallel,
+            req.devices,
         )
         return {"status": "started", **updated_data}
     except ValueError as e:

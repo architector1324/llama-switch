@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Llama Switch</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=14">
+    <link rel="stylesheet" href="/static/css/style.css?v=15">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body class="dark-theme">
@@ -169,6 +169,15 @@
                                 <span class="control-hint" id="parallel-hint"></span>
                             </div>
 
+                            <div class="control-group compact-group" id="devices-control">
+                                <label for="devices-input" title="Which cards the model may use. All lets the backend spread it across every device, as before. Applied when the model loads, so changing it reloads it.">GPU</label>
+                                <div class="input-wrapper">
+                                    <select id="devices-input" class="res-select" onchange="applyDevicesChange()">
+                                        <option value="">All GPUs</option>
+                                    </select>
+                                </div>
+                            </div>
+
                             <div class="control-group compact-group" id="preserve-think-control">
                                 <label for="preserve-think-input" title="Pull the reasoning of earlier assistant turns back into the prompt. Off means every turn starts from a clean slate. Applied when the model loads, so toggling reloads it.">Preserve Thinking</label>
                                 <div class="input-wrapper">
@@ -255,6 +264,6 @@
             </section>
         </main>
     </div>
-    <script src="/static/js/app.js?v=25"></script>
+    <script src="/static/js/app.js?v=26"></script>
 </body>
 </html>

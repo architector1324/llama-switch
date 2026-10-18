@@ -275,6 +275,17 @@ body {
     border-color: rgba(16, 185, 129, 0.2);
 }
 
+/* Several models can run at once; this is the one the dashboard reports on.
+   Clicking another running row moves the dashboard to it. */
+.model-item.active.focused {
+    background-color: rgba(16, 185, 129, 0.16);
+    border-color: var(--success);
+}
+
+.model-item.active {
+    cursor: pointer;
+}
+
 .model-info {
     display: flex;
     flex-direction: column;

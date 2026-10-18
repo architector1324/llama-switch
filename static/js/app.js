@@ -305,7 +305,7 @@ function renderModelGroup(list, models, modelKeys, sectionName) {
             const quants = Object.keys(modelInfo);
             if (quants.length > 1) {
                 quantSelector = `
-                    <select class="quant-select" id="quant-select-${key}" onchange="handleQuantChange('${key}')">
+                    <select class="quant-select" id="quant-select-${key}" onclick="event.stopPropagation()" onchange="handleQuantChange('${key}')">
                         ${quants.map((q, i) => `<option value="${q}" ${i === 0 ? 'selected' : ''}>${q}</option>`).join('')}
                     </select>
                 `;
@@ -314,17 +314,26 @@ function renderModelGroup(list, models, modelKeys, sectionName) {
             }
         }
 
+        item.onclick = () => focusModel(key);
         item.innerHTML = `
             <div class="model-info">
                 <div class="model-name">${key}</div>
                 ${quantSelector}
             </div>
             <div class="actions">
-                <button class="btn btn-primary btn-sm model-btn" onclick="handleModelClick('${key}')">Load</button>
+                <button class="btn btn-primary btn-sm model-btn" onclick="event.stopPropagation(); handleModelClick('${key}')">Load</button>
             </div>
         `;
         list.appendChild(item);
     });
+}
+
+function focusModel(key) {
+    if (!instances.some(i => i.model === key)) return;
+    focusedModel = key;
+    if (lastStatus) updateStatusDisplay(lastStatus);
+    updateActiveModel(lastStatus || {});
+    refreshLogs();
 }
 
 function handleModelClick(key) {
@@ -908,11 +917,14 @@ function applyDashboardKind(kind) {
 
 function updateActiveModel(status) {
     const byKey = new Map((status.instances || []).map(i => [i.model, i]));
+    const shown = runningInstance();
     document.querySelectorAll('.model-item').forEach(el => {
-        el.classList.remove('active');
+        el.classList.remove('active', 'focused');
         const inst = byKey.get(el.dataset.key);
         if (!inst) return;
         el.classList.add('active');
+        // The one the dashboard is reporting on, when several are up.
+        if (shown && shown.model === inst.model) el.classList.add('focused');
 
         const quantSelect = el.querySelector('.quant-select');
         if (quantSelect && inst.quantization && quantSelect.value !== inst.quantization) {

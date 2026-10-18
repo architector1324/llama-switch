@@ -440,6 +440,10 @@ def _iter_output_chunks(proc):
         yield _ANSI_RE.sub("", buf).rstrip()
 
 
+#   0.46.251.374 I srv  update_slots: all slots are idle
+IDLE_LINE = "update_slots: all slots are idle"
+
+
 def log_reader(proc, inst):
     # prompt eval time =       4.67 ms /    11 tokens (    0.42 ms per token,  2355.46 tokens per second)
     re_prompt = re.compile(
@@ -551,6 +555,11 @@ def log_reader(proc, inst):
 
     try:
         for decoded in _iter_output_chunks(proc):
+            # At trace level, which the memory panel needs, llama.cpp reports an
+            # idle server once a second. Nothing reads it, and it buried the
+            # request lines in the panel, so it is dropped before it is stored.
+            if decoded and IDLE_LINE in decoded:
+                continue
             if decoded:
                 inst.logs.append(decoded)
 

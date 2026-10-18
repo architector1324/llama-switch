@@ -574,6 +574,39 @@ async function applyResChange() {
     reloadCurrentModel();
 }
 
+// A reset is every field changing at once, so like any field change it
+// restarts the model it applies to. The server owns the defaults.
+async function postReset(query) {
+    try {
+        const res = await fetch('/api/reset' + query, { method: 'POST' });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            alert('Error: ' + (err.detail || res.status));
+        }
+    } catch (e) {
+        alert('Network error: ' + e.message);
+    }
+    // The fields must take the defaults even where the user had typed.
+    resetControlPristine();
+    pollStatus();
+}
+
+async function resetFocused() {
+    const inst = runningInstance();
+    const kinds = (currentConfig && currentConfig.kinds) || {};
+    const picked = focusedModel && kinds[focusedModel] === activeSection ? focusedModel : null;
+    const key = inst ? inst.model : picked;
+    await postReset(key ? `?model=${encodeURIComponent(key)}` : `?kind=${encodeURIComponent(activeSection)}`);
+}
+
+async function resetAll() {
+    const n = instances.length;
+    if (n && !confirm(n > 1
+            ? `Reset every setting and restart all ${n} running models?`
+            : 'Reset every setting and restart the running model?')) return;
+    await postReset('');
+}
+
 async function stopServer() {
     const n = instances.length;
     if (!confirm(n > 1 ? `Stop all ${n} running models?` : 'Stop the running model?')) return;

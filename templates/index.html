@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Llama Switch</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=20">
+    <link rel="stylesheet" href="/static/css/style.css?v=21">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body class="dark-theme">
@@ -21,7 +21,8 @@
             <section class="panel models-panel">
                 <div class="panel-header">
                     <h2>Models</h2>
-                    <div class="actions">
+                    <div class="actions actions-row">
+                        <button class="btn btn-outline" onclick="resetAll()" title="Every setting in every section back to its default. Running models restart with them.">Reset All</button>
                         <button class="btn btn-danger" onclick="stopServer()">Stop All</button>
                     </div>
                 </div>
@@ -39,6 +40,9 @@
                 <div class="panel controls-panel">
                     <div class="panel-header">
                         <h2>Dashboard</h2>
+                        <div class="actions actions-row">
+                            <button id="reset-btn" class="btn btn-outline btn-sm" onclick="resetFocused()" title="This model's settings back to their defaults. If it is running, it restarts with them.">Reset</button>
+                        </div>
                     </div>
                     
                     <div class="dashboard-grid">
@@ -299,6 +303,6 @@
             </section>
         </main>
     </div>
-    <script src="/static/js/app.js?v=38"></script>
+    <script src="/static/js/app.js?v=39"></script>
 </body>
 </html>

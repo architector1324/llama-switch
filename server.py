@@ -972,6 +972,7 @@ def _start_model_server(
     preserve_think: Optional[bool] = None,
     parallel: Optional[int] = None,
     devices: Optional[str] = None,
+    replace_only: bool = False,
 ) -> Dict:
     if not state.config_mgr:
         raise RuntimeError("Config not initialized")
@@ -1102,7 +1103,7 @@ def _start_model_server(
     with state.lock:
         # Off: starting anything clears the board, which is how it always worked.
         # On: only the same model is replaced, so the rest keep running.
-        if state.multi:
+        if state.multi or replace_only:
             _stop_instance_unsafe(model_key)
         else:
             _stop_all_unsafe()
@@ -1385,6 +1386,75 @@ def stop_server(model: Optional[str] = None):
         else:
             stopped = _stop_all_unsafe()
     return {"status": "stopped", "stopped": stopped}
+
+
+def _reset_section_unsafe(kind: str) -> None:
+    """One section's remembered choices back to the defaults. Caller holds the lock."""
+    state.selected_devices.pop(kind, None)
+    if kind == "llm":
+        state.selected_ctx = 0
+        state.selected_parallel = 0
+        state.selected_preserve_think = False
+    elif kind == "sd":
+        state.selected_res = ""
+        state.selected_hires = False
+    elif kind == "tts":
+        state.selected_frames = 0
+
+
+@app.post("/api/reset")
+def reset_settings(model: Optional[str] = None, kind: Optional[str] = None):
+    """Settings back to their defaults, restarting whatever they apply to.
+
+    Every field change restarts its model, so a reset -- all of them changing at
+    once -- does too. ?model= covers that model and its section, ?kind= a section
+    with nothing picked in it, neither of them every section and every model.
+    """
+    if not state.config_mgr:
+        raise HTTPException(status_code=500, detail="Config not initialized")
+
+    with state.lock:
+        if model:
+            model_kind = state.config_mgr.get_kind(model)
+            if not model_kind:
+                raise HTTPException(status_code=404, detail=f"Model {model} not found")
+            _reset_section_unsafe(model_kind)
+            inst = state.instance_for_model(model)
+            targets = [(inst.model_key, inst.quant)] if inst and inst.alive() else []
+        elif kind:
+            if kind not in SECTIONS:
+                raise HTTPException(status_code=404, detail=f"Unknown section {kind}")
+            _reset_section_unsafe(kind)
+            targets = []
+        else:
+            for name in SECTIONS:
+                _reset_section_unsafe(name)
+            targets = [
+                (i.model_key, i.quant) for i in state.instances.values() if i.alive()
+            ]
+
+    restarted = []
+    for key, quant in targets:
+        try:
+            _start_model_server(
+                key,
+                quant,
+                ctx=state.default_ctx,
+                frames=state.default_frames,
+                res=state.default_res,
+                hires=False,
+                preserve_think=False,
+                parallel=state.default_parallel,
+                devices="",
+                # A single reset behaves like any field change; reset-all must
+                # restart every model, not let the first one evict the rest.
+                replace_only=not model,
+            )
+        except (ValueError, RuntimeError) as e:
+            raise HTTPException(status_code=500, detail=f"{key}: {e}")
+        restarted.append(key)
+
+    return {"status": "reset", "restarted": restarted}
 
 
 @app.post("/api/start")

@@ -214,6 +214,13 @@ body {
     align-items: center;
 }
 
+/* Header button groups (Reset All next to Stop All). */
+.actions-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
 .panel-header h2 {
     font-size: 14px;
     font-weight: 600;

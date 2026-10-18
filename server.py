@@ -1511,10 +1511,13 @@ async def proxy_to_llama(request: Request):
     # Its own port, so another model being up changes nothing for this request.
     target_url = f"http://{state.host}:{inst.port}{request.url.path}"
 
+    # The body is resent whole with its own length, so a chunked upload's
+    # Transfer-Encoding must not travel with it: both headers together make
+    # llama-server answer 400 (Open WebUI streams its STT uploads chunked).
     filtered_headers = {
         k: v
         for k, v in request.headers.items()
-        if k.lower() not in ("content-length", "host")
+        if k.lower() not in ("content-length", "host", "transfer-encoding")
     }
 
     try:
@@ -1650,7 +1653,7 @@ async def _proxy_to_current(
     filtered_headers = {
         k: v
         for k, v in request.headers.items()
-        if k.lower() not in ("content-length", "host")
+        if k.lower() not in ("content-length", "host", "transfer-encoding")
     }
 
     try:

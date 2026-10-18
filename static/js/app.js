@@ -96,8 +96,62 @@ function instanceFor(section) {
     return here[0] || null;
 }
 
+// Not a config section: a view over every instance that is up, whatever its kind.
+const RUNNING = 'running';
+
 function runningInstance() {
+    if (activeSection === RUNNING) {
+        return instances.find(i => i.model === focusedModel) || instances[0] || null;
+    }
     return instanceFor(activeSection);
+}
+
+// Everywhere else the tab is the kind. On Running the kinds are mixed, so the
+// dashboard takes the kind of the model it is showing -- or none at all.
+function dashboardKind() {
+    if (activeSection !== RUNNING) return activeSection;
+    const inst = runningInstance();
+    return inst ? inst.kind : null;
+}
+
+// Mixed kinds need a kind label per row; the order is the tab order, so a
+// restart does not shuffle the list.
+function sortedInstances() {
+    const order = Object.keys(SECTION_LABELS);
+    return [...instances].sort((a, b) =>
+        (order.indexOf(a.kind) - order.indexOf(b.kind)) || a.model.localeCompare(b.model));
+}
+
+let lastRunningSignature = '';
+
+function renderRunningList(list) {
+    lastRunningSignature = runningSignature();
+    const rows = sortedInstances();
+    if (!rows.length) {
+        list.innerHTML = '<div class="loading">Nothing is running</div>';
+        return;
+    }
+    rows.forEach(inst => {
+        const item = document.createElement('div');
+        item.className = 'model-item';
+        item.dataset.key = inst.model;
+        item.onclick = () => focusModel(inst.model);
+        const quant = inst.quantization ? `<span class="quant-label">${inst.quantization}</span>` : '';
+        item.innerHTML = `
+            <div class="model-info">
+                <div class="model-name">${inst.model}</div>
+                <div class="running-meta">${quant}<span class="kind-label">${SECTION_LABELS[inst.kind] || inst.kind}</span></div>
+            </div>
+            <div class="actions">
+                <button class="btn btn-primary btn-sm model-btn" onclick="event.stopPropagation(); handleModelClick('${inst.model}')">Unload</button>
+            </div>
+        `;
+        list.appendChild(item);
+    });
+}
+
+function runningSignature() {
+    return sortedInstances().map(i => `${i.model}:${i.quantization}:${i.kind}`).join('|');
 }
 let preserveInputPristine = true;
 
@@ -118,7 +172,7 @@ async function fetchLogsOwner() {
             // Leave it empty; the caller treats that as "nothing to show".
         }
     }
-    const mine = !!(inst && owner.kind === activeSection);
+    const mine = !!(inst && owner.kind === dashboardKind());
     if (el) el.textContent = (mine && owner.model) ? `· ${owner.model}` : '';
     return { ...owner, mine, model: inst ? inst.model : null };
 }
@@ -185,7 +239,7 @@ function renderSdProfileLabels() {
 }
 
 function selectedDevices() {
-    if (activeSection === 'sd') {
+    if (dashboardKind() === 'sd') {
         const parts = [];
         for (const [role, id] of SD_DEVICE_ROLES) {
             const el = document.getElementById(id);
@@ -218,13 +272,13 @@ async function fetchConfig() {
             if (resInput) resInput.value = data.default_res;
         }
         const up = (lastStatus && lastStatus.instances) || [];
-        if (up.length && !up.some(i => i.kind === activeSection)) {
+        if (activeSection !== RUNNING && up.length && !up.some(i => i.kind === activeSection)) {
             activeSection = up[0].kind;
             localStorage.setItem('activeSection', activeSection);
         }
         renderSectionTabs();
         renderModelList(data.models || {});
-        applyDashboardKind(activeSection);
+        applyDashboardKind(dashboardKind());
         await fetchDevices();
     } catch (e) {
         console.error("Failed to load config", e);
@@ -244,10 +298,13 @@ function renderSectionTabs() {
     const names = Object.keys(currentConfig.sections).filter(
         n => Object.keys(currentConfig.sections[n] || {}).length > 0
     );
-    if (names.length && !names.includes(activeSection)) activeSection = names[0];
+    if (names.length && activeSection !== RUNNING && !names.includes(activeSection)) {
+        activeSection = names[0];
+    }
     bar.innerHTML = names.map(n =>
         `<button class="section-tab${n === activeSection ? ' active' : ''}" onclick="selectSection('${n}')">${SECTION_LABELS[n] || n}</button>`
-    ).join('');
+    ).join('') +
+        `<button class="section-tab running-tab${activeSection === RUNNING ? ' active' : ''}" onclick="selectSection('${RUNNING}')">Running</button>`;
 }
 
 function selectSection(name) {
@@ -256,7 +313,7 @@ function selectSection(name) {
     localStorage.setItem('activeSection', name);
     renderSectionTabs();
     renderModelList(currentConfig ? currentConfig.models || {} : {});
-    applyDashboardKind(activeSection);
+    applyDashboardKind(dashboardKind());
     // Draw from the cached status first so the panel changes immediately, then
     // ask the backend: everything here is per-section, and waiting out the 5s
     // poll left the previous tab's answers on screen.
@@ -268,6 +325,11 @@ function selectSection(name) {
 function renderModelList(models) {
     const list = document.getElementById('model-list');
     list.innerHTML = '';
+
+    if (activeSection === RUNNING) {
+        renderRunningList(list);
+        return;
+    }
 
     if (Object.keys(models).length === 0) {
         list.innerHTML = '<div class="model-item">No models found in config</div>';
@@ -398,7 +460,7 @@ async function loadModel(key, quantization = null) {
     const preserveThink = preserveInput ? preserveInput.checked : false;
     
     const kind = currentConfig && currentConfig.kinds ? currentConfig.kinds[key] : null;
-    if (kind && kind !== activeSection) selectSection(kind);
+    if (kind && kind !== activeSection && activeSection !== RUNNING) selectSection(kind);
 
     currentLoadingModel = key;
     updateButtonsState(lastStatus);
@@ -596,6 +658,7 @@ async function resetFocused() {
     const kinds = (currentConfig && currentConfig.kinds) || {};
     const picked = focusedModel && kinds[focusedModel] === activeSection ? focusedModel : null;
     const key = inst ? inst.model : picked;
+    if (!key && activeSection === RUNNING) return; // nothing up, nothing to reset
     await postReset(key ? `?model=${encodeURIComponent(key)}` : `?kind=${encodeURIComponent(activeSection)}`);
 }
 
@@ -707,16 +770,17 @@ function updateStatusDisplay(status) {
     renderParallelHint();
 
     const perKind = status.selected_devices || {};
-    const chosen = inst ? (inst.devices || '') : (perKind[activeSection] || '');
+    const shownKind = dashboardKind();
+    const chosen = inst ? (inst.devices || '') : (perKind[shownKind] || '');
     const devicesInput = document.getElementById('devices-input');
     if (devicesInputPristine && devicesInput && document.activeElement !== devicesInput
-        && activeSection !== 'sd') {
+        && shownKind !== 'sd') {
         // Only when the option exists: the device list loads asynchronously.
         if ([...devicesInput.options].some(o => o.value === chosen)) {
             devicesInput.value = chosen;
         }
     }
-    if (activeSection === 'sd' && devicesInputPristine) {
+    if (shownKind === 'sd' && devicesInputPristine) {
         const assigned = Object.fromEntries(
             chosen.split(',').filter(Boolean).map(p => {
                 const [role, dev] = p.split('=');
@@ -772,7 +836,13 @@ function updateStatusDisplay(status) {
     const modelText = document.getElementById('current-model');
     const webuiBtn = document.getElementById('webui-btn');
     
-    applyDashboardKind(activeSection);
+    applyDashboardKind(dashboardKind());
+
+    // Models start and stop under the Running tab; redraw its list when the set
+    // changes, not on every poll, so hover and scroll survive.
+    if (activeSection === RUNNING && runningSignature() !== lastRunningSignature) {
+        renderModelList(currentConfig ? currentConfig.models || {} : {});
+    }
 
     // Looking at a tab whose backend is not the running one: the numbers on screen
     // would belong to someone else, so blank them rather than leave them stale.
@@ -793,10 +863,13 @@ function updateStatusDisplay(status) {
     if (!inst) {
         // Something may well be running elsewhere; this section has nothing.
         const pickedHere = focusedModel
+            && activeSection !== RUNNING
             && currentConfig.kinds
             && currentConfig.kinds[focusedModel] === activeSection;
         indicator.classList.remove('on');
-        statusText.innerText = 'Not loaded';
+        // "Stopped" only when there is truly nothing: no instance anywhere and no
+        // row picked here. Otherwise this view is simply not loaded.
+        statusText.innerText = (instances.length || pickedHere) ? 'Not loaded' : 'Stopped';
         statusText.style.color = 'var(--text-secondary)';
         modelText.innerText = pickedHere ? focusedModel : '-';
         webuiBtn.style.display = 'none';
@@ -933,6 +1006,16 @@ function updateStatusDisplay(status) {
 
 // One stat block per backend, and only llm has a context window to set.
 function applyDashboardKind(kind) {
+    if (!kind) {
+        ['stats-llm', 'stats-mem', 'mem-devices-row', 'stats-sd', 'stats-tts',
+         'stats-decision', 'ctx-control', 'frames-control', 'res-control',
+         'hires-control', 'parallel-control', 'devices-control',
+         'sd-devices-control', 'preserve-think-control'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = 'none';
+        });
+        return;
+    }
     const isSd = kind === 'sd';
     const isTts = kind === 'tts';
     // Music has no counters of its own yet, but it is not a language model either:

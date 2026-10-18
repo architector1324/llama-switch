@@ -846,3 +846,33 @@ input[type="number"]:focus {
     border-color: var(--primary);
     color: var(--text-primary);
 }
+
+/* Running is not a config section but a view over everything that is up,
+   so it is set apart in the success colour the running rows already use. */
+.section-tab.running-tab {
+    color: var(--success);
+}
+
+.section-tab.running-tab:hover {
+    color: var(--success);
+}
+
+.section-tab.running-tab.active {
+    border-color: var(--success);
+    color: var(--success);
+}
+
+/* Quant and kind side by side: the Running list mixes kinds. */
+.running-meta {
+    display: flex;
+    gap: 6px;
+}
+
+.kind-label {
+    font-size: 11px;
+    color: var(--success);
+    border: 1px solid rgba(16, 185, 129, 0.35);
+    padding: 1px 6px;
+    border-radius: var(--radius-sm);
+    width: fit-content;
+}

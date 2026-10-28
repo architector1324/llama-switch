@@ -49,6 +49,7 @@ type runOptions struct {
 	Images    []string // sd: images to edit rather than draw anew
 	Mask      string   // sd: which part of them to edit
 	Play      bool     // play a clip once it is saved
+	Save      bool     // llm: save the code blocks of an answer to files
 	Voice     string
 	Duration  float64
 	Lyrics    string
@@ -62,7 +63,8 @@ input piped in, one result; with neither and a terminal, a session.
 
 What a model does with its input depends on its type:
   llm       answers it; a session keeps the conversation. Image, audio and
-            video files named in it go along, for a model that takes them
+            video files named in it go along, for a model that takes them;
+            in a terminal, the code blocks of the answer are saved to files
   sd        draws it into a PNG; image files named in it, or with --image,
             it edits instead
   tts       says it, into a WAV it then plays
@@ -73,7 +75,8 @@ What a model does with its input depends on its type:
 
 A file is named by its path: as it is, quoted, with its spaces escaped, or
 dragged in. Images and audio made go to -o, to stdout when that is not a
-terminal, or else to a new file in the current directory.
+terminal, or else to a new file in the current directory. So does each code
+block of an answer in a terminal, its extension from the block's language.
 
 The dashboard's settings are flags too: --gpu, --ctx, --parallel,
 --preserve-thinking, --size, --hires, --frames, --single. Given one, the model
@@ -97,6 +100,7 @@ var runFlagKinds = map[string][]string{
 	"frames":            {"tts"},
 	"o":                 {"sd", "tts", "music"},
 	"no-play":           {"tts", "music"},
+	"no-save":           {"llm"},
 	"voice":             {"tts"},
 	"duration":          {"music"},
 	"lyrics":            {"music"},
@@ -105,7 +109,7 @@ var runFlagKinds = map[string][]string{
 
 // Where run's flags land.
 type runArgs struct {
-	hide, verbose, noPlay                          bool
+	hide, verbose, noPlay, noSave                  bool
 	system, output, voice, lyrics, questions, mask string
 	duration                                       float64
 	images                                         fileList
@@ -119,6 +123,7 @@ func runFlags(a *runArgs) *flag.FlagSet {
 	fs.BoolVar(&a.verbose, "verbose", false, "print timings and counts after each result")
 	fs.StringVar(&a.output, "o", "", "sd, tts, music: write the result to this `file`")
 	fs.BoolVar(&a.noPlay, "no-play", false, "tts, music: save the audio without playing it")
+	fs.BoolVar(&a.noSave, "no-save", false, "llm: leave the code blocks of the answer unsaved")
 	fs.StringVar(&a.voice, "voice", "", "tts: the voice to speak with")
 	fs.Float64Var(&a.duration, "duration", 0, "music: length in seconds (default: the model's)")
 	fs.StringVar(&a.lyrics, "lyrics", "", "music: lyrics to sing")
@@ -180,6 +185,7 @@ func runCommand(args []string) {
 		Images:   a.images,
 		Mask:     a.mask,
 		Play:     !a.noPlay,
+		Save:     !a.noSave,
 		Voice:    a.voice,
 		Duration: a.duration,
 		Lyrics:   a.lyrics,
@@ -460,6 +466,10 @@ func chatTask(opts runOptions, out, errOut io.Writer) runTask {
 				return err
 			}
 			history = append(history, chatMessage{"assistant", answer})
+			// Piped, the blocks are in the text that goes out.
+			if opts.Save && opts.Styled {
+				return saveBlocks(opts, answer, out)
+			}
 			return nil
 		},
 		clear: func() { history = nil },

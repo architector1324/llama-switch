@@ -29,13 +29,14 @@ func TestCheckRunFlags(t *testing.T) {
 		want  string
 	}{
 		{[]string{"gpu", "single", "verbose"}, "sd", ""},
-		{[]string{"ctx", "parallel", "preserve-thinking", "hide-thinking"}, "llm", ""},
+		{[]string{"ctx", "parallel", "preserve-thinking", "hide-thinking", "no-save"}, "llm", ""},
 		{[]string{"ctx", "questions"}, "decision", ""},
 		{[]string{"size", "hires", "o"}, "sd", ""},
 		{[]string{"frames", "voice", "no-play"}, "tts", ""},
 		{[]string{"ctx"}, "sd", "--ctx is for llm and decision models, and m is a sd model"},
 		{[]string{"o"}, "llm", "-o is for sd, tts and music models, and m is a llm model"},
 		{[]string{"frames"}, "music", "--frames is for tts models, and m is a music model"},
+		{[]string{"no-save"}, "sd", "--no-save is for llm models, and m is a sd model"},
 		{[]string{"preserve-thinking"}, "decision", "--preserve-thinking is for llm models, and m is a decision model"},
 	} {
 		set := map[string]bool{}
@@ -856,5 +857,98 @@ func TestMediaPartConvertsAudioTheEngineCannotRead(t *testing.T) {
 		if audio["format"] != "wav" || !bytes.HasPrefix(raw, []byte("RIFF")) || bytes.Equal(raw, mustRead(t, path)) != wantSame {
 			t.Errorf("%s: format %q, %d bytes", path, audio["format"], len(raw))
 		}
+	}
+}
+
+// --- Code blocks of an answer ---
+
+func TestCodeBlocks(t *testing.T) {
+	answer := "Here it is:\n\n```json\n{\"a\": 1}\n```\n\nAnd a drawing:\n\n" +
+		"~~~svg\n<svg/>\n~~~\n\n" +
+		"1. In a list:\n   ```python\n   def f():\n       return 1\n   ```\n" +
+		"````markdown\n```go\nx\n```\n````\n" +
+		"```inline``` is not a fence\n" +
+		"```\n\n```\n" + // empty
+		"```{.bash title=\"x\"}\r\necho hi\r\n```\r\n" +
+		"```c++\nint main() {}\n```\n" +
+		"```js\nbroken off"
+	want := []codeBlock{
+		{"json", "{\"a\": 1}\n"},
+		{"svg", "<svg/>\n"},
+		{"python", "def f():\n    return 1\n"},
+		{"markdown", "```go\nx\n```\n"},
+		{"bash", "echo hi\n"},
+		{"c++", "int main() {}\n"},
+	}
+	if got := codeBlocks(answer); fmt.Sprintf("%q", got) != fmt.Sprintf("%q", want) {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+	if got := codeBlocks("no code at all"); len(got) != 0 {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestBlockExt(t *testing.T) {
+	for _, tc := range []struct{ lang, text, ext string }{
+		{"json", `{"a": 1}`, "json"},
+		{"python", "print(1)", "py"},
+		{"c++", "int main() {}", "cpp"},
+		{"go", "package main", "go"},
+		{"dockerfile", "FROM scratch", "dockerfile"},
+		{"shell-session", "$ ls", "txt"},
+		// No language, or a generic one: what it holds says.
+		{"", `<svg xmlns="http://www.w3.org/2000/svg"/>`, "svg"},
+		{"xml", "<?xml version=\"1.0\"?>\n<svg/>", "svg"},
+		{"text", "<svg/>", "svg"},
+		{"xml", "<root/>", "xml"},
+		{"", "[1, 2]", "json"},
+		{"", "<!DOCTYPE html>\n<html></html>", "html"},
+		{"", "just words", "txt"},
+	} {
+		if got := blockExt(codeBlock{tc.lang, tc.text + "\n"}); got != tc.ext {
+			t.Errorf("%q %q: %q, want %q", tc.lang, tc.text, got, tc.ext)
+		}
+	}
+}
+
+func TestChatSavesCodeBlocks(t *testing.T) {
+	answer := "Sure.\n\n```json\n{\"a\": 1}\n```\n\n```\n<svg/>\n```\n"
+	_, url := scripted(t, sse(delta("content", answer)))
+	dir := t.TempDir()
+	wd, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(wd)
+
+	saved := func() []string {
+		names, _ := filepath.Glob("gemma4-e2b-*")
+		return names
+	}
+	var out bytes.Buffer
+	opts := runOptions{Server: url, Model: "gemma4:e2b", Styled: true, Save: true}
+	if err := chatTask(opts, &out, io.Discard).turn(context.Background(), "make them"); err != nil {
+		t.Fatal(err)
+	}
+	files := saved()
+	if len(files) != 2 {
+		t.Fatalf("saved %v", files)
+	}
+	for _, f := range files {
+		want := map[string]string{".json": "{\"a\": 1}\n", ".svg": "<svg/>\n"}[filepath.Ext(f)]
+		if got := string(mustRead(t, f)); got != want {
+			t.Errorf("%s holds %q, want %q", f, got, want)
+		}
+		if !strings.Contains(out.String(), "\nSaved "+f+"\n") {
+			t.Errorf("no note of %s in %q", f, out.String())
+		}
+	}
+
+	// Piped, the blocks are in the text already; --no-save keeps them there too.
+	for _, o := range []runOptions{{Server: url, Model: "gemma4:e2b", Save: true}, {Server: url, Model: "gemma4:e2b", Styled: true}} {
+		if err := chatTask(o, io.Discard, io.Discard).turn(context.Background(), "again"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := saved(); len(got) != 2 {
+		t.Errorf("saved %v", got)
 	}
 }

@@ -25,7 +25,7 @@ Llama Switch puts one dashboard and one OpenAI-compatible endpoint in front of s
   - **Decision:** time of the last decision, its prompt size, requests served.
   - **Transcription** and **Music:** none yet.
 - **Auto-switching from the API**: a request that names a `model` loads it first, whether the name arrives in a JSON body (chat, images, speech) or in a multipart upload (transcriptions, image edits).
-- **Terminal client**: `llmsw run`, `list` and `ps`, in the manner of ollama: chat with a model, see what the config offers and what is up.
+- **Terminal client**: `llmsw run`, `list` and `ps`, in the manner of ollama: run a model of any type with the dashboard's settings as flags, see what the config offers and what is up.
 - **Upstream Logs**: each model keeps its own log, and the panel names whose log it is showing.
 - **Theme Support**: built-in Dark and Light modes.
 - **WebUI Link**: opens the running engine's own interface on the engine's own address. Engine pages request their paths absolutely, so none of them survive being served under a prefix here.
@@ -193,22 +193,61 @@ Besides `serve`, the binary is a client for a running server, much like ollama's
 
 | Command | Does |
 | --- | --- |
-| `llmsw run MODEL [PROMPT]` | chat with a language model, loading it first if it is not up |
+| `llmsw run MODEL [PROMPT]` | run a model of any type, loading it first if it is not up |
 | `llmsw list [TYPE]`, `llmsw ls` | every model in the config with its type, quant and state; `TYPE` narrows it to one section |
 | `llmsw ps`, `llmsw status` | the models that are up: state, memory, cards, context window and port |
 
 They reach the server at `LLMSW_HOST`, `localhost:11435` by default; a bare `host:port` and a full URL both work. Model names are the ids `/v1/models` lists, so whatever `list` shows can go to `run`.
 
-`run` with no prompt opens a session in the terminal: the conversation so far goes with every message, `/clear` forgets it, `"""` starts and ends a message of several lines, Ctrl+C stops the answer being written, and `/bye` or Ctrl+D leaves. Given a prompt, or text on its standard input, it answers once and exits; piped text comes first and the prompt after it:
+`run` takes its input from the prompt or from standard input and gives one result; piped text comes first and the prompt after it. With neither and a terminal it opens a session: `"""` starts and ends a message of several lines, Ctrl+C stops the result being made, and `/bye` or Ctrl+D leaves. What a model does with its input depends on its type:
+
+| Type | Input | Result |
+| --- | --- | --- |
+| `llm` | a message | the answer, streamed; a session keeps the conversation, and `/clear` forgets it |
+| `sd` | a prompt | a PNG |
+| `tts` | text | a WAV of it spoken, played at once |
+| `music` | a prompt | a WAV of the piece, played at once |
+| `stt` | recordings named on the command line, audio piped in, or a path per message | the transcript |
+| `decision` | a yes/no question with the state piped in, or the state for the questions in `--questions` | the answers |
 
 ```bash
 llmsw run gemma4 "Say hi in three words"
-git diff | llmsw run qwen3.6:35b "Write a commit message for this"
+git diff | llmsw run qwen3.6:35b --system "You write commit messages." "Write one for this"
+llmsw run z-image "a red cat on a windowsill" > cat.png
+llmsw run qwen3-tts --voice Kore "Hello there"
+llmsw run qwen3-asr meeting.mp3
+cat ticket.txt | llmsw run clef:9b "Is this urgent?"
 ```
 
-A model's reasoning is shown dimmed, between `Thinking...` and `...done thinking.`, while the answer goes to a terminal; `--hide-thinking` leaves it out, and so does sending the output anywhere else. A model that takes longer to load than the server's one-minute wait is simply waited for.
+Images and audio go to the `-o` file; without one, to standard output when that is not a terminal, and otherwise to a new file in the current directory named after the model and the time. Audio saved in a terminal is played with the first of `pw-play`, `paplay`, `aplay` or `ffplay` there is; `--no-play` only saves it. A decision model prints a table in a terminal and the whole JSON answer, probabilities and all, anywhere else. The `--questions` file holds the `questions` object of a `/v1/systemone` request, on its own or inside `{"questions": ...}`.
 
-`--verbose` follows each answer with the figures llama-server reports for it, the way ollama's does: prompt and generation token counts, durations and rates, prompt cache hits and accepted draft tokens. Load duration is the rest of the request's time, the model's load when it was not up. They go to stderr, so a pipe still gets the answer alone.
+Flags that go with one type:
+
+| Flag | Type | Does |
+| --- | --- | --- |
+| `--system TEXT` | `llm` | the system prompt; a session keeps it through `/clear` |
+| `--hide-thinking` | `llm` | leaves the reasoning out |
+| `--voice NAME` | `tts` | the voice, one of those `/v1/audio/voices` lists |
+| `--duration SECONDS`, `--lyrics TEXT` | `music` | the piece's length and words |
+| `--questions FILE` | `decision` | the questions to ask |
+| `-o FILE`, `--no-play` | `sd`, `tts`, `music` | where the result goes; audio saved but not played |
+
+The dashboard's settings are flags too, each for the types the dashboard shows it for. Given one, the model starts with it, as changing the field on the dashboard restarts it; the settings not given keep the running instance's values, and a model already running so is left alone:
+
+| Flag | Type | Dashboard field |
+| --- | --- | --- |
+| `--gpu CARD` | every type | **GPU**: a card as the picker names it, several joined by commas, or `all`. For `sd`, `role=card` pairs set **GPU per module**: `--gpu diffusion=Vulkan1,te=Vulkan0` |
+| `--ctx N`, `--parallel N` | `llm`, `decision` | **Context Window** (per slot), **Parallel Slots** |
+| `--preserve-thinking` | `llm` | **Preserve Thinking**; `--preserve-thinking=false` turns it off |
+| `--size WxH`, `--hires` | `sd` | **Output Size**, **Hires Fix** |
+| `--frames N` | `tts` | **Max Frames** |
+| `--multi` | every type | **Multi-model**, set before the model loads; `--multi=false` turns it off |
+
+A flag for another type is an error rather than quietly ignored.
+
+A language model's reasoning is shown dimmed, between `Thinking...` and `...done thinking.`, while the answer goes to a terminal; `--hide-thinking` leaves it out, and so does sending the output anywhere else. While the server works, the spinner says what it is waiting for: `loading MODEL`, or for an image `step 3/8`. A model that takes longer to load than the server's one-minute wait is simply waited for.
+
+`--verbose` follows each result with its figures, on stderr so that a pipe still gets the result alone. For a language model they are what llama-server reports, the way ollama prints them: prompt and generation token counts, durations and rates, prompt cache hits and accepted draft tokens; load duration is the rest of the request's time, the model's load when it was not up. For the other types: the total time, and an image's size, a clip's length and speed against realtime, or a decision's prompt size.
 
 ### As a systemd service
 

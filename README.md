@@ -53,6 +53,154 @@ Llama Switch puts one dashboard and one OpenAI-compatible endpoint in front of s
    ```
    The sources, dashboard included, live in `src/`; the binary, `llmsw`, goes to `~/.local/bin`, where the bundled systemd unit expects it, and runs from any directory.
 
+## Usage
+
+Write a config first, as [Configuration](#configuration) describes, then start the server:
+
+```bash
+llmsw serve --config config.yaml --watch
+```
+
+It serves the dashboard and the [API](#api) on `http://localhost:11435`. Use it from the terminal with the same binary, or from the browser; to keep it running, install it [as a systemd service](#as-a-systemd-service).
+
+### From the terminal
+
+Besides `serve`, the binary is a client for a running server, much like ollama's:
+
+| Command | Does |
+| --- | --- |
+| `llmsw run MODEL [PROMPT]` | run a model of any type, loading it first if it is not up |
+| `llmsw list [TYPE]`, `llmsw ls` | every model in the config with its type, quant and state; `TYPE` narrows it to one section |
+| `llmsw ps [MODEL...]`, `llmsw status` | the models that are up: state, memory, cards, context window and port. With names, as `ps` names them, what the dashboard shows of each: its settings, the counters for its type, and its memory by card, with the host's as RAM |
+| `llmsw stop MODEL...`, `llmsw stop --all` | unload the models named, as `ps` names them, or every one; a name that is not up stops nothing |
+| `llmsw completion fish` | the completion script for fish, [below](#shell-completion) |
+
+They reach the server at `LLMSW_HOST`, `localhost:11435` by default; a bare `host:port` and a full URL both work. Model names are the ids `/v1/models` lists, so whatever `list` shows can go to `run`.
+
+The state `list` and `ps` show is `loading`, `idle`, or what the model is doing: `generating`, `processing prompt` while a language model reads its prompt, `transcribing` for `stt` and `deciding` for `decision`; `exited` once its process has. The server counts the requests it passes on, so work shows at once. A language model's slots, polled every second, also show work sent straight to the engine's port.
+
+`run` takes its input from the prompt or from standard input and gives one result; piped text comes first and the prompt after it. With neither and a terminal it opens a session: `"""` starts and ends a message of several lines, Ctrl+C stops the result being made, and `/bye` or Ctrl+D leaves. What a model does with its input depends on its type:
+
+| Type | Input | Result |
+| --- | --- | --- |
+| `llm` | a message, with the image, audio and video files it names | the answer, streamed; a session keeps the conversation, and `/clear` forgets it; in a terminal, each code block in it is saved to a file |
+| `sd` | a prompt, with the images to edit if any | a PNG |
+| `tts` | text | a WAV of it spoken, played at once |
+| `music` | a prompt | a WAV of the piece, played at once |
+| `stt` | recordings named on the command line, audio piped in, or a path per message | the transcript |
+| `decision` | a yes/no question with the state piped in, or the state for the questions in `--questions` | the answers |
+
+```bash
+llmsw run gemma4 "Say hi in three words"
+llmsw run gemma4 photo.png "What is in the picture?"
+git diff | llmsw run qwen3.6:35b --system "You write commit messages." "Write one for this"
+llmsw run z-image "a red cat on a windowsill" > cat.png
+llmsw run mage-flow-edit cat.png "make the cat black"
+llmsw run qwen3-tts --voice Kore "Hello there"
+llmsw run qwen3-asr meeting.mp3
+cat ticket.txt | llmsw run clef:9b "Is this urgent?"
+```
+
+Files go along by their paths. A path in the prompt or in a session's message, typed, pasted or dragged in from a file manager, is taken out of the text and sent with it; quoted, with its spaces escaped or as a `file://` URL, it counts the same.
+
+- A language model gets the image, audio and video files named, if its mmproj takes them; otherwise llama-server says so. It reads WAV, MP3 and FLAC; other audio goes through ffmpeg into WAV first. A session keeps the files in the conversation, and a path to no file stays part of the question.
+- An image model draws a new picture from the prompt, or edits the images it is given: the ones named, and the ones given with `--image`. A path to no image is an error rather than a prompt nobody meant.
+
+Only the prompt and the messages name files. Piped text is sent as it is, so `ls | llmsw run gemma4 "Which are photos?"` attaches nothing.
+
+Images and audio go to the `-o` file; without one, to standard output when that is not a terminal, and otherwise to a new file in the current directory named after the model and the time. Audio saved in a terminal is played with the first of `pw-play`, `paplay`, `aplay` or `ffplay` there is; `--no-play` only saves it.
+
+In a terminal, each code block of a language model's answer is saved the same way, to a new file named after the model and the time. The extension comes from the block's language: `json`, `svg`, `py` for `python` and so on. A block with no language, or with `xml` or `text`, that holds SVG, JSON or an HTML page gets that extension, and any other gets `txt`. `--no-save` leaves the blocks in the answer only; piped elsewhere, the answer carries them anyway and nothing is saved.
+
+A decision model prints a table in a terminal and the whole JSON answer, probabilities and all, anywhere else. The `--questions` file holds the `questions` object of a `/v1/systemone` request, on its own or inside `{"questions": ...}`.
+
+Flags that go with one type:
+
+| Flag | Type | Does |
+| --- | --- | --- |
+| `--system TEXT` | `llm` | the system prompt; a session keeps it through `/clear` |
+| `--hide-thinking` | `llm` | leaves the reasoning out |
+| `--voice NAME` | `tts` | the voice, one of those `/v1/audio/voices` lists |
+| `--duration SECONDS`, `--lyrics TEXT` | `music` | the piece's length and words |
+| `--questions FILE` | `decision` | the questions to ask |
+| `--image FILE`, `--mask FILE` | `sd` | an image to edit, again for several; the part of it to change |
+| `-o FILE`, `--no-play` | `sd`, `tts`, `music` | where the result goes; audio saved but not played |
+| `--no-save` | `llm` | leaves the answer's code blocks unsaved |
+
+The dashboard's settings are flags too, each for the types the dashboard shows it for. Given one, the model starts with it, as changing the field on the dashboard restarts it; the settings not given keep the running instance's values, and a model already running so is left alone:
+
+| Flag | Type | Dashboard field |
+| --- | --- | --- |
+| `--gpu CARD` | every type | **GPU**: a card as the picker names it, several joined by commas, or `all`. For `sd`, `role=card` pairs set **GPU per module**: `--gpu diffusion=Vulkan1,te=Vulkan0` |
+| `--ctx N`, `--parallel N` | `llm`, `decision` | **Context Window** (per slot), **Parallel Slots** |
+| `--preserve-thinking` | `llm` | **Preserve Thinking**; `--preserve-thinking=false` turns it off |
+| `--size WxH`, `--hires` | `sd` | **Output Size**, **Hires Fix** |
+| `--frames N` | `tts` | **Max Frames** |
+| `--single` | every type | **Multi-model** off, set before the model loads, so the model runs alone; `--single=false` turns it back on |
+
+A flag for another type is an error rather than quietly ignored.
+
+A language model's reasoning is shown dimmed, between `Thinking...` and `...done thinking.`, while the answer goes to a terminal; `--hide-thinking` leaves it out, and so does sending the output anywhere else. While the server works, the spinner says what it is waiting for: `loading MODEL`, or for an image `step 3/8`. A model that takes longer to load than the server's one-minute wait is simply waited for.
+
+`--verbose` follows each result with its figures, on stderr so that a pipe still gets the result alone. For a language model they are what llama-server reports, the way ollama prints them: prompt and generation token counts, durations and rates, prompt cache hits and accepted draft tokens; load duration is the rest of the request's time, the model's load when it was not up. For the other types: the total time, and an image's size, a clip's length and speed against realtime, or a decision's prompt size.
+
+### Shell completion
+
+`llmsw completion fish` prints a completion script for fish. Install it once:
+
+```fish
+llmsw completion fish > ~/.config/fish/completions/llmsw.fish
+```
+
+The script asks the binary what fits as you type, through the server at `LLMSW_HOST`, so it keeps up with the config by itself. It offers:
+
+- the commands, and the models in the config with their types;
+- after a model, only the flags for its type;
+- the server's cards for `--gpu`, and the dashboard's sizes for `--size`;
+- for `ps` and `stop`, the models that are up;
+- file names where a file goes: recordings for `stt`, attachments for `llm` and `sd`, and the files that flags take.
+
+### The dashboard
+
+Open `http://localhost:11435` in your browser.
+
+- Pick a section tab, click a model, set its GPU, context and the rest, then click **Load**.
+- **Multi-model** keeps several models up; turn it off for one at a time. Click any running row, here or on the **Running** tab, to switch the dashboard to it.
+- Change any field to restart that model with it; **Reset** puts the model back on defaults, **Reset All** does it for everything.
+- Click **Open WebUI** to access the running engine's native interface.
+- Click **Unload** on a model, or **Stop All**.
+
+### The microphone
+
+Everything is served over plain `http`. Browsers only hand over the microphone in a secure context, and `localhost` is the only plain-http address that counts as one, so recording controls are unavailable from a phone or a laptop reaching this machine by hostname or IP.
+
+### Server flags
+
+`llmsw serve` takes:
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `-H`, `--host` | `localhost` | interface for the UI **and** for the engines it launches |
+| `-p`, `--port` | `11435` | UI port (engines get a free port each) |
+| `-c`, `--ctx` | `4096` | default context window, per slot |
+| `-np`, `--parallel` | `1` | default number of slots |
+| `-f`, `--config` | `config.yaml` | config file path |
+| `-w`, `--watch` | off | reload the config when it changes on disk |
+
+> Note that `--watch` reloads the config by **stopping every running model**. Do not edit the config while a model is mid-generation.
+
+### As a systemd service
+
+The repository carries a user unit, [llama-switch.service](llama-switch.service), that runs `llmsw serve` from `~/.local/bin` on `~/.config/llama-switch/config.yaml` with `--watch`. Add whatever flags you need to its `ExecStart` (`--host 0.0.0.0` to reach the dashboard from other machines), then:
+
+```bash
+cp llama-switch.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now llama-switch
+```
+
+The server's own messages, config reloads and the command line of every start among them, go to the journal: `journalctl --user -u llama-switch -f`. What the engines print is in each model's **Upstream Logs** on the dashboard.
+
 ## Configuration
 
 Create a config file. The bundled systemd unit reads `~/.config/llama-switch/config.yaml`; started by hand, the binary reads `config.yaml` in the current directory unless `-f` names another. Models are grouped into up to six sections; you can define as many models as you like in each, and leave out any section you do not use.
@@ -156,148 +304,3 @@ Management:
 | `GET /api/logs[?model=]`, `GET /api/logs/owner[?model=]`, `POST /api/logs/clear[?model=]` | a model's log |
 | `GET /api/devices` | the cards the engine reports, with PCI addresses |
 | `GET /api/config` | the config, grouped by section |
-
-## Usage
-
-1. **Start the server:**
-   ```bash
-   llmsw serve --config config.yaml --watch
-   ```
-
-2. **Open the Dashboard:**
-   Navigate to `http://localhost:11435` in your browser.
-
-3. **Control Models:**
-   - Pick a section tab, click a model, set its GPU, context and the rest, then click **Load**.
-   - **Multi-model** keeps several models up; turn it off for one at a time. Click any running row, here or on the **Running** tab, to switch the dashboard to it.
-   - Change any field to restart that model with it; **Reset** puts the model back on defaults, **Reset All** does it for everything.
-   - Click **Open WebUI** to access the running engine's native interface.
-   - Click **Unload** on a model, or **Stop All**.
-
-### Server flags
-
-`llmsw serve` takes:
-
-| Flag | Default | Meaning |
-| --- | --- | --- |
-| `-H`, `--host` | `localhost` | interface for the UI **and** for the engines it launches |
-| `-p`, `--port` | `11435` | UI port (engines get a free port each) |
-| `-c`, `--ctx` | `4096` | default context window, per slot |
-| `-np`, `--parallel` | `1` | default number of slots |
-| `-f`, `--config` | `config.yaml` | config file path |
-| `-w`, `--watch` | off | reload the config when it changes on disk |
-
-### From the terminal
-
-Besides `serve`, the binary is a client for a running server, much like ollama's:
-
-| Command | Does |
-| --- | --- |
-| `llmsw run MODEL [PROMPT]` | run a model of any type, loading it first if it is not up |
-| `llmsw list [TYPE]`, `llmsw ls` | every model in the config with its type, quant and state; `TYPE` narrows it to one section |
-| `llmsw ps [MODEL...]`, `llmsw status` | the models that are up: state, memory, cards, context window and port. With names, as `ps` names them, what the dashboard shows of each: its settings, the counters for its type, and its memory by card, with the host's as RAM |
-| `llmsw stop MODEL...`, `llmsw stop --all` | unload the models named, as `ps` names them, or every one; a name that is not up stops nothing |
-| `llmsw completion fish` | the completion script for fish, [below](#shell-completion) |
-
-They reach the server at `LLMSW_HOST`, `localhost:11435` by default; a bare `host:port` and a full URL both work. Model names are the ids `/v1/models` lists, so whatever `list` shows can go to `run`.
-
-The state `list` and `ps` show is `loading`, `idle`, or what the model is doing: `generating`, `processing prompt` while a language model reads its prompt, `transcribing` for `stt` and `deciding` for `decision`; `exited` once its process has. The server counts the requests it passes on, so work shows at once. A language model's slots, polled every second, also show work sent straight to the engine's port.
-
-`run` takes its input from the prompt or from standard input and gives one result; piped text comes first and the prompt after it. With neither and a terminal it opens a session: `"""` starts and ends a message of several lines, Ctrl+C stops the result being made, and `/bye` or Ctrl+D leaves. What a model does with its input depends on its type:
-
-| Type | Input | Result |
-| --- | --- | --- |
-| `llm` | a message, with the image, audio and video files it names | the answer, streamed; a session keeps the conversation, and `/clear` forgets it; in a terminal, each code block in it is saved to a file |
-| `sd` | a prompt, with the images to edit if any | a PNG |
-| `tts` | text | a WAV of it spoken, played at once |
-| `music` | a prompt | a WAV of the piece, played at once |
-| `stt` | recordings named on the command line, audio piped in, or a path per message | the transcript |
-| `decision` | a yes/no question with the state piped in, or the state for the questions in `--questions` | the answers |
-
-```bash
-llmsw run gemma4 "Say hi in three words"
-llmsw run gemma4 photo.png "What is in the picture?"
-git diff | llmsw run qwen3.6:35b --system "You write commit messages." "Write one for this"
-llmsw run z-image "a red cat on a windowsill" > cat.png
-llmsw run mage-flow-edit cat.png "make the cat black"
-llmsw run qwen3-tts --voice Kore "Hello there"
-llmsw run qwen3-asr meeting.mp3
-cat ticket.txt | llmsw run clef:9b "Is this urgent?"
-```
-
-Files go along by their paths. A path in the prompt or in a session's message, typed, pasted or dragged in from a file manager, is taken out of the text and sent with it; quoted, with its spaces escaped or as a `file://` URL, it counts the same.
-
-- A language model gets the image, audio and video files named, if its mmproj takes them; otherwise llama-server says so. It reads WAV, MP3 and FLAC; other audio goes through ffmpeg into WAV first. A session keeps the files in the conversation, and a path to no file stays part of the question.
-- An image model draws a new picture from the prompt, or edits the images it is given: the ones named, and the ones given with `--image`. A path to no image is an error rather than a prompt nobody meant.
-
-Only the prompt and the messages name files. Piped text is sent as it is, so `ls | llmsw run gemma4 "Which are photos?"` attaches nothing.
-
-Images and audio go to the `-o` file; without one, to standard output when that is not a terminal, and otherwise to a new file in the current directory named after the model and the time. Audio saved in a terminal is played with the first of `pw-play`, `paplay`, `aplay` or `ffplay` there is; `--no-play` only saves it.
-
-In a terminal, each code block of a language model's answer is saved the same way, to a new file named after the model and the time. The extension comes from the block's language: `json`, `svg`, `py` for `python` and so on. A block with no language, or with `xml` or `text`, that holds SVG, JSON or an HTML page gets that extension, and any other gets `txt`. `--no-save` leaves the blocks in the answer only; piped elsewhere, the answer carries them anyway and nothing is saved.
-
-A decision model prints a table in a terminal and the whole JSON answer, probabilities and all, anywhere else. The `--questions` file holds the `questions` object of a `/v1/systemone` request, on its own or inside `{"questions": ...}`.
-
-Flags that go with one type:
-
-| Flag | Type | Does |
-| --- | --- | --- |
-| `--system TEXT` | `llm` | the system prompt; a session keeps it through `/clear` |
-| `--hide-thinking` | `llm` | leaves the reasoning out |
-| `--voice NAME` | `tts` | the voice, one of those `/v1/audio/voices` lists |
-| `--duration SECONDS`, `--lyrics TEXT` | `music` | the piece's length and words |
-| `--questions FILE` | `decision` | the questions to ask |
-| `--image FILE`, `--mask FILE` | `sd` | an image to edit, again for several; the part of it to change |
-| `-o FILE`, `--no-play` | `sd`, `tts`, `music` | where the result goes; audio saved but not played |
-| `--no-save` | `llm` | leaves the answer's code blocks unsaved |
-
-The dashboard's settings are flags too, each for the types the dashboard shows it for. Given one, the model starts with it, as changing the field on the dashboard restarts it; the settings not given keep the running instance's values, and a model already running so is left alone:
-
-| Flag | Type | Dashboard field |
-| --- | --- | --- |
-| `--gpu CARD` | every type | **GPU**: a card as the picker names it, several joined by commas, or `all`. For `sd`, `role=card` pairs set **GPU per module**: `--gpu diffusion=Vulkan1,te=Vulkan0` |
-| `--ctx N`, `--parallel N` | `llm`, `decision` | **Context Window** (per slot), **Parallel Slots** |
-| `--preserve-thinking` | `llm` | **Preserve Thinking**; `--preserve-thinking=false` turns it off |
-| `--size WxH`, `--hires` | `sd` | **Output Size**, **Hires Fix** |
-| `--frames N` | `tts` | **Max Frames** |
-| `--single` | every type | **Multi-model** off, set before the model loads, so the model runs alone; `--single=false` turns it back on |
-
-A flag for another type is an error rather than quietly ignored.
-
-A language model's reasoning is shown dimmed, between `Thinking...` and `...done thinking.`, while the answer goes to a terminal; `--hide-thinking` leaves it out, and so does sending the output anywhere else. While the server works, the spinner says what it is waiting for: `loading MODEL`, or for an image `step 3/8`. A model that takes longer to load than the server's one-minute wait is simply waited for.
-
-`--verbose` follows each result with its figures, on stderr so that a pipe still gets the result alone. For a language model they are what llama-server reports, the way ollama prints them: prompt and generation token counts, durations and rates, prompt cache hits and accepted draft tokens; load duration is the rest of the request's time, the model's load when it was not up. For the other types: the total time, and an image's size, a clip's length and speed against realtime, or a decision's prompt size.
-
-### Shell completion
-
-`llmsw completion fish` prints a completion script for fish. Install it once:
-
-```fish
-llmsw completion fish > ~/.config/fish/completions/llmsw.fish
-```
-
-The script asks the binary what fits as you type, through the server at `LLMSW_HOST`, so it keeps up with the config by itself. It offers:
-
-- the commands, and the models in the config with their types;
-- after a model, only the flags for its type;
-- the server's cards for `--gpu`, and the dashboard's sizes for `--size`;
-- for `ps` and `stop`, the models that are up;
-- file names where a file goes: recordings for `stt`, attachments for `llm` and `sd`, and the files that flags take.
-
-### As a systemd service
-
-The repository carries a user unit, [llama-switch.service](llama-switch.service), that runs `llmsw serve` from `~/.local/bin` on `~/.config/llama-switch/config.yaml` with `--watch`. Add whatever flags you need to its `ExecStart` (`--host 0.0.0.0` to reach the dashboard from other machines), then:
-
-```bash
-cp llama-switch.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now llama-switch
-```
-
-The server's own messages, config reloads and the command line of every start among them, go to the journal: `journalctl --user -u llama-switch -f`. What the engines print is in each model's **Upstream Logs** on the dashboard.
-
-### The microphone
-
-Everything is served over plain `http`. Browsers only hand over the microphone in a secure context, and `localhost` is the only plain-http address that counts as one, so recording controls are unavailable from a phone or a laptop reaching this machine by hostname or IP.
-
-> Note that `--watch` reloads the config by **stopping every running model**. Do not edit the config while a model is mid-generation.

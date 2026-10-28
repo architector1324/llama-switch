@@ -207,7 +207,7 @@ The state `list` and `ps` show is `loading`, `idle`, or what the model is doing:
 
 | Type | Input | Result |
 | --- | --- | --- |
-| `llm` | a message, with the image, audio and video files it names | the answer, streamed; a session keeps the conversation, and `/clear` forgets it |
+| `llm` | a message, with the image, audio and video files it names | the answer, streamed; a session keeps the conversation, and `/clear` forgets it; in a terminal, each code block in it is saved to a file |
 | `sd` | a prompt, with the images to edit if any | a PNG |
 | `tts` | text | a WAV of it spoken, played at once |
 | `music` | a prompt | a WAV of the piece, played at once |
@@ -232,7 +232,11 @@ Files go along by their paths. A path in the prompt or in a session's message, t
 
 Only the prompt and the messages name files. Piped text is sent as it is, so `ls | llmsw run gemma4 "Which are photos?"` attaches nothing.
 
-Images and audio go to the `-o` file; without one, to standard output when that is not a terminal, and otherwise to a new file in the current directory named after the model and the time. Audio saved in a terminal is played with the first of `pw-play`, `paplay`, `aplay` or `ffplay` there is; `--no-play` only saves it. A decision model prints a table in a terminal and the whole JSON answer, probabilities and all, anywhere else. The `--questions` file holds the `questions` object of a `/v1/systemone` request, on its own or inside `{"questions": ...}`.
+Images and audio go to the `-o` file; without one, to standard output when that is not a terminal, and otherwise to a new file in the current directory named after the model and the time. Audio saved in a terminal is played with the first of `pw-play`, `paplay`, `aplay` or `ffplay` there is; `--no-play` only saves it.
+
+In a terminal, each code block of a language model's answer is saved the same way, to a new file named after the model and the time. The extension comes from the block's language: `json`, `svg`, `py` for `python` and so on. A block with no language, or with `xml` or `text`, that holds SVG, JSON or an HTML page gets that extension, and any other gets `txt`. `--no-save` leaves the blocks in the answer only; piped elsewhere, the answer carries them anyway and nothing is saved.
+
+A decision model prints a table in a terminal and the whole JSON answer, probabilities and all, anywhere else. The `--questions` file holds the `questions` object of a `/v1/systemone` request, on its own or inside `{"questions": ...}`.
 
 Flags that go with one type:
 
@@ -245,6 +249,7 @@ Flags that go with one type:
 | `--questions FILE` | `decision` | the questions to ask |
 | `--image FILE`, `--mask FILE` | `sd` | an image to edit, again for several; the part of it to change |
 | `-o FILE`, `--no-play` | `sd`, `tts`, `music` | where the result goes; audio saved but not played |
+| `--no-save` | `llm` | leaves the answer's code blocks unsaved |
 
 The dashboard's settings are flags too, each for the types the dashboard shows it for. Given one, the model starts with it, as changing the field on the dashboard restarts it; the settings not given keep the running instance's values, and a model already running so is left alone:
 

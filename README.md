@@ -201,6 +201,8 @@ Besides `serve`, the binary is a client for a running server, much like ollama's
 
 They reach the server at `LLMSW_HOST`, `localhost:11435` by default; a bare `host:port` and a full URL both work. Model names are the ids `/v1/models` lists, so whatever `list` shows can go to `run`.
 
+The state `list` and `ps` show is `loading`, `idle`, or what the model is doing: `generating`, `processing prompt` while a language model reads its prompt, `transcribing` for `stt` and `deciding` for `decision`; `exited` once its process has. The server counts the requests it passes on, so work shows at once. A language model's slots, polled every second, also show work sent straight to the engine's port.
+
 `run` takes its input from the prompt or from standard input and gives one result; piped text comes first and the prompt after it. With neither and a terminal it opens a session: `"""` starts and ends a message of several lines, Ctrl+C stops the result being made, and `/bye` or Ctrl+D leaves. What a model does with its input depends on its type:
 
 | Type | Input | Result |

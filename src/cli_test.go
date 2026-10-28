@@ -372,7 +372,6 @@ func TestReplCtrlCStopsTheAnswer(t *testing.T) {
 
 func TestListAndPs(t *testing.T) {
 	h := newHarness(t)
-	h.ok("POST", "/api/multi", map[string]any{"multi": true})
 	h.start(map[string]any{"model_key": "zeta", "quantization": "q8", "parallel": 2})
 	h.start(map[string]any{"model_key": "img"})
 
@@ -432,7 +431,6 @@ func TestListAndPs(t *testing.T) {
 
 func TestStop(t *testing.T) {
 	h := newHarness(t)
-	h.ok("POST", "/api/multi", map[string]any{"multi": true})
 	h.start(map[string]any{"model_key": "zeta", "quantization": "q8"})
 	h.start(map[string]any{"model_key": "img"})
 	h.start(map[string]any{"model_key": "voice"})
@@ -472,7 +470,6 @@ func TestStop(t *testing.T) {
 
 func TestPsShowsDetails(t *testing.T) {
 	h := newHarness(t)
-	h.ok("POST", "/api/multi", map[string]any{"multi": true})
 	h.start(map[string]any{"model_key": "zeta", "quantization": "q8", "parallel": 2})
 	h.start(map[string]any{"model_key": "img"})
 	h.start(map[string]any{"model_key": "voice"})

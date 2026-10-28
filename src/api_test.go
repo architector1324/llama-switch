@@ -78,7 +78,7 @@ func resetState() {
 	opMu.Unlock()
 
 	state.mu.Lock()
-	state.multi = false
+	state.multi = true
 	state.defaultCtx, state.selectedCtx = 4096, 0
 	state.defaultParallel, state.selectedParallel = 1, 0
 	state.defaultFrames, state.selectedFrames = 2048, 0
@@ -498,16 +498,12 @@ func TestStartRejectsBadSettings(t *testing.T) {
 
 func TestEvictionFollowsMultiModel(t *testing.T) {
 	h := newHarness(t)
+	// On from the start: a load leaves the others up.
+	if multi := h.status()["multi"]; multi != true {
+		t.Errorf("multi at start: %v", multi)
+	}
 	h.start(map[string]any{"model_key": "zeta"})
 	h.start(map[string]any{"model_key": "voice"})
-	if got := h.running(); !reflect.DeepEqual(got, []string{"voice"}) {
-		t.Errorf("multi off: %v, want only the last start", got)
-	}
-
-	if out := h.ok("POST", "/api/multi", map[string]any{"multi": true}); out["multi"] != true {
-		t.Fatalf("multi: %v", out)
-	}
-	h.start(map[string]any{"model_key": "zeta"})
 	h.start(map[string]any{"model_key": "img"})
 	if got := h.running(); !reflect.DeepEqual(got, []string{"img", "voice", "zeta"}) {
 		t.Errorf("multi on: %v", got)
@@ -525,7 +521,15 @@ func TestEvictionFollowsMultiModel(t *testing.T) {
 		t.Errorf("multi without a value: %d %v", code, out)
 	}
 
-	if out := h.ok("POST", "/api/stop", nil); out["stopped"] != 3.0 {
+	if out := h.ok("POST", "/api/multi", map[string]any{"multi": false}); out["multi"] != false {
+		t.Fatalf("multi: %v", out)
+	}
+	h.start(map[string]any{"model_key": "voice"})
+	if got := h.running(); !reflect.DeepEqual(got, []string{"voice"}) {
+		t.Errorf("multi off: %v, want only the last start", got)
+	}
+
+	if out := h.ok("POST", "/api/stop", nil); out["stopped"] != 1.0 {
 		t.Errorf("stop all: %v", out)
 	}
 }
@@ -692,6 +696,7 @@ func TestChatAutoloadsAndStripsTheASRHeader(t *testing.T) {
 	if q := h.instance("zeta")["quantization"]; q != "q8" {
 		t.Errorf("suffixed id loaded %v", q)
 	}
+	h.ok("POST", "/api/multi", map[string]any{"multi": false})
 	h.ok("POST", "/v1/responses", map[string]any{"model": "legacy"})
 	if got := h.running(); !reflect.DeepEqual(got, []string{"legacy"}) {
 		t.Errorf("running %v: with Multi-model off a request evicts the rest", got)

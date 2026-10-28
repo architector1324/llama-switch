@@ -200,7 +200,8 @@ type ServiceState struct {
 	// so loading the same model again replaces it rather than doubling it.
 	instances map[string]*Instance
 	order     []string
-	// Off keeps the old behaviour: starting anything stops everything else.
+	// On from the start. Off keeps the old behaviour: starting anything stops
+	// everything else.
 	multi      bool
 	defaultCtx int
 	// Survives sd loads and stops, so a round trip keeps the user's choice.
@@ -233,6 +234,7 @@ type ServiceState struct {
 
 var state = &ServiceState{
 	instances:       map[string]*Instance{},
+	multi:           true,
 	defaultCtx:      4096,
 	defaultParallel: 1,
 	selectedDevices: map[string]string{},

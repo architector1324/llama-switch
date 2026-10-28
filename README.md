@@ -205,7 +205,7 @@ They reach the server at `LLMSW_HOST`, `localhost:11435` by default; a bare `hos
 | Type | Input | Result |
 | --- | --- | --- |
 | `llm` | a message | the answer, streamed; a session keeps the conversation, and `/clear` forgets it |
-| `sd` | a prompt | a PNG |
+| `sd` | a prompt, with the images to edit if any | a PNG |
 | `tts` | text | a WAV of it spoken, played at once |
 | `music` | a prompt | a WAV of the piece, played at once |
 | `stt` | recordings named on the command line, audio piped in, or a path per message | the transcript |
@@ -215,10 +215,13 @@ They reach the server at `LLMSW_HOST`, `localhost:11435` by default; a bare `hos
 llmsw run gemma4 "Say hi in three words"
 git diff | llmsw run qwen3.6:35b --system "You write commit messages." "Write one for this"
 llmsw run z-image "a red cat on a windowsill" > cat.png
+llmsw run mage-flow-edit cat.png "make the cat black"
 llmsw run qwen3-tts --voice Kore "Hello there"
 llmsw run qwen3-asr meeting.mp3
 cat ticket.txt | llmsw run clef:9b "Is this urgent?"
 ```
+
+An image model draws a new picture from the prompt, or edits pictures given to it: an image file named in the message, typed, pasted or dragged in from a file manager, is taken out of the text and sent along, quoted paths, escaped spaces and `file://` URLs included, and so are the files given with `--image`. A session takes them the same way, a message at a time.
 
 Images and audio go to the `-o` file; without one, to standard output when that is not a terminal, and otherwise to a new file in the current directory named after the model and the time. Audio saved in a terminal is played with the first of `pw-play`, `paplay`, `aplay` or `ffplay` there is; `--no-play` only saves it. A decision model prints a table in a terminal and the whole JSON answer, probabilities and all, anywhere else. The `--questions` file holds the `questions` object of a `/v1/systemone` request, on its own or inside `{"questions": ...}`.
 
@@ -231,6 +234,7 @@ Flags that go with one type:
 | `--voice NAME` | `tts` | the voice, one of those `/v1/audio/voices` lists |
 | `--duration SECONDS`, `--lyrics TEXT` | `music` | the piece's length and words |
 | `--questions FILE` | `decision` | the questions to ask |
+| `--image FILE`, `--mask FILE` | `sd` | an image to edit, again for several; the part of it to change |
 | `-o FILE`, `--no-play` | `sd`, `tts`, `music` | where the result goes; audio saved but not played |
 
 The dashboard's settings are flags too, each for the types the dashboard shows it for. Given one, the model starts with it, as changing the field on the dashboard restarts it; the settings not given keep the running instance's values, and a model already running so is left alone:

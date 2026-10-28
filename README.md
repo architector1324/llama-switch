@@ -48,9 +48,9 @@ Llama Switch puts one dashboard and one OpenAI-compatible endpoint in front of s
 
 2. **Build the binary:**
    ```bash
-   cd src && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o ~/.local/bin/llama-switch .
+   cd src && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o ~/.local/bin/llmsw .
    ```
-   The sources, dashboard included, live in `src/`; the binary goes to `~/.local/bin`, where the bundled systemd unit expects it, and runs from any directory.
+   The sources, dashboard included, live in `src/`; the binary, `llmsw`, goes to `~/.local/bin`, where the bundled systemd unit expects it, and runs from any directory.
 
 ## Configuration
 
@@ -160,7 +160,7 @@ Management:
 
 1. **Start the server:**
    ```bash
-   llama-switch --config config.yaml --watch
+   llmsw --config config.yaml --watch
    ```
 
 2. **Open the Dashboard:**
@@ -186,7 +186,7 @@ Management:
 
 ### As a systemd service
 
-The repository carries a user unit, [llama-switch.service](llama-switch.service), that runs `~/.local/bin/llama-switch` on `~/.config/llama-switch/config.yaml` with `--watch`. Add whatever flags you need to its `ExecStart` (`--host 0.0.0.0` to reach the dashboard from other machines), then:
+The repository carries a user unit, [llama-switch.service](llama-switch.service), that runs `~/.local/bin/llmsw` on `~/.config/llama-switch/config.yaml` with `--watch`. Add whatever flags you need to its `ExecStart` (`--host 0.0.0.0` to reach the dashboard from other machines), then:
 
 ```bash
 cp llama-switch.service ~/.config/systemd/user/

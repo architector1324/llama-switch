@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/llama-switch --config %h/.config/llama-switch/config.yaml --watch
+ExecStart=%h/.local/bin/llmsw --config %h/.config/llama-switch/config.yaml --watch
 Restart=on-failure
 RestartSec=5
 

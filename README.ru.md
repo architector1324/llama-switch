@@ -48,9 +48,9 @@ Llama Switch ставит один дашборд и один OpenAI-совме�
 
 2. **Соберите бинарь:**
    ```bash
-   cd src && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o ~/.local/bin/llama-switch .
+   cd src && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o ~/.local/bin/llmsw .
    ```
-   Исходники, включая дашборд, лежат в `src/`; бинарь кладётся в `~/.local/bin`, где его ждёт systemd-юнит из репозитория, и запускается из любой директории.
+   Исходники, включая дашборд, лежат в `src/`; бинарь `llmsw` кладётся в `~/.local/bin`, где его ждёт systemd-юнит из репозитория, и запускается из любой директории.
 
 ## Настройка
 
@@ -160,7 +160,7 @@ Qwen3-ASR начинает транскрипт с заголовка `language 
 
 1. **Запустите сервер:**
    ```bash
-   llama-switch --config config.yaml --watch
+   llmsw --config config.yaml --watch
    ```
 
 2. **Откройте дашборд:**
@@ -186,7 +186,7 @@ Qwen3-ASR начинает транскрипт с заголовка `language 
 
 ### Как systemd-сервис
 
-В репозитории лежит пользовательский юнит [llama-switch.service](llama-switch.service): он запускает `~/.local/bin/llama-switch` на `~/.config/llama-switch/config.yaml` с `--watch`. Добавьте в его `ExecStart` нужные флаги (`--host 0.0.0.0`, чтобы дашборд был доступен с других машин), затем:
+В репозитории лежит пользовательский юнит [llama-switch.service](llama-switch.service): он запускает `~/.local/bin/llmsw` на `~/.config/llama-switch/config.yaml` с `--watch`. Добавьте в его `ExecStart` нужные флаги (`--host 0.0.0.0`, чтобы дашборд был доступен с других машин), затем:
 
 ```bash
 cp llama-switch.service ~/.config/systemd/user/

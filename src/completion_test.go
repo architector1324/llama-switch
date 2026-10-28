@@ -42,7 +42,7 @@ func TestComplete(t *testing.T) {
 			return has(names(c), "--size", "--image", "-o", "--gpu", "--verbose") && !has(names(c), "--system")
 		}, "an image model's flags"},
 		{"run --ctx 8192", "", func(c []string) bool { return has(names(c), "zeta") }, "a flag's value is not the model"},
-		{"run --multi zeta", "-", func(c []string) bool { return has(names(c), "--system") && !has(names(c), "--size") }, "a bool flag takes no value"},
+		{"run --single zeta", "-", func(c []string) bool { return has(names(c), "--system") && !has(names(c), "--size") }, "a bool flag takes no value"},
 		{"run img --size", "", func(c []string) bool { return has(c, "1024x1024\t1:1", "2752x1536\t16:9") }, "the dashboard's sizes"},
 		{"run img -o", "", func(c []string) bool { return fmt.Sprint(c) == "["+filesMarker+"]" }, "a file"},
 		{"run zeta", "wh", func(c []string) bool { return fmt.Sprint(c) == "["+filesMarker+"]" }, "files a message names"},

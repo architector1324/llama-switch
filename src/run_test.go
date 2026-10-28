@@ -28,7 +28,7 @@ func TestCheckRunFlags(t *testing.T) {
 		kind  string
 		want  string
 	}{
-		{[]string{"gpu", "multi", "verbose"}, "sd", ""},
+		{[]string{"gpu", "single", "verbose"}, "sd", ""},
 		{[]string{"ctx", "parallel", "preserve-thinking", "hide-thinking"}, "llm", ""},
 		{[]string{"ctx", "questions"}, "decision", ""},
 		{[]string{"size", "hires", "o"}, "sd", ""},
@@ -73,8 +73,8 @@ func settings(flags map[string]any) runSettings {
 			s.preserve = v.(bool)
 		case "hires":
 			s.hires = v.(bool)
-		case "multi":
-			s.multi = v.(bool)
+		case "single":
+			s.single = v.(bool)
 		}
 	}
 	return s
@@ -121,15 +121,22 @@ func TestApplySettingsRestartsLikeTheDashboard(t *testing.T) {
 	}
 
 	img := runOptions{Server: h.url, Model: "img", ModelKey: "img"}
-	if err := applySettings(ctx, img, "q8_0", settings(map[string]any{"multi": true, "size": "512X768", "hires": true,
+	if err := applySettings(ctx, img, "q8_0", settings(map[string]any{"single": true, "size": "512X768", "hires": true,
 		"gpu": "vae=Vulkan1"})); err != nil {
 		t.Fatal(err)
 	}
 	if inst = h.waitReady("img"); inst["res"] != "512x768" || inst["hires"] != true || inst["devices"] != "vae=Vulkan1" {
 		t.Errorf("img: %v", inst)
 	}
-	if h.status()["multi"] != true || h.instance("zeta") == nil {
-		t.Error("--multi did not keep zeta up")
+	if h.status()["multi"] != false || h.instance("zeta") != nil {
+		t.Error("--single left zeta up")
+	}
+	// Nothing else given: only Multi-model changes.
+	if err := applySettings(ctx, img, "q8_0", settings(map[string]any{"single": false})); err != nil {
+		t.Fatal(err)
+	}
+	if h.status()["multi"] != true || h.instance("img") == nil {
+		t.Error("--single=false did not turn Multi-model back on")
 	}
 
 	err := applySettings(ctx, img, "q8_0", settings(map[string]any{"size": "big"}))

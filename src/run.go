@@ -76,7 +76,7 @@ dragged in. Images and audio made go to -o, to stdout when that is not a
 terminal, or else to a new file in the current directory.
 
 The dashboard's settings are flags too: --gpu, --ctx, --parallel,
---preserve-thinking, --size, --hires, --frames, --multi. Given one, the model
+--preserve-thinking, --size, --hires, --frames, --single. Given one, the model
 starts with it, as a change on the dashboard would restart it; whatever is not
 given stays as it was.
 
@@ -133,7 +133,7 @@ func runFlags(a *runArgs) *flag.FlagSet {
 	fs.StringVar(&s.size, "size", "", "sd: output size, WIDTHxHEIGHT")
 	fs.BoolVar(&s.hires, "hires", false, "sd: hires fix")
 	fs.IntVar(&s.frames, "frames", 0, "tts: max frames")
-	fs.BoolVar(&s.multi, "multi", false, "turn Multi-model on, or off with --multi=false, before loading")
+	fs.BoolVar(&s.single, "single", false, "turn Multi-model off before loading, so the model runs alone; --single=false turns it back on")
 	fs.Usage = func() {
 		fmt.Fprint(fs.Output(), runUsage)
 		printFlags(fs, nil)
@@ -279,18 +279,18 @@ func joinWords(words []string) string {
 
 // The dashboard's settings, as run's flags give them.
 type runSettings struct {
-	set                    map[string]bool // the flags given
-	gpu, size              string
-	ctx, parallel, frames  int
-	preserve, hires, multi bool
+	set                     map[string]bool // the flags given
+	gpu, size               string
+	ctx, parallel, frames   int
+	preserve, hires, single bool
 }
 
 // Do what the dashboard does when a field changes: start the model with the
 // new value. The fields not given keep the running instance's values, and a
 // model already running exactly so is left alone.
 func applySettings(ctx context.Context, opts runOptions, quant string, s runSettings) error {
-	if s.set["multi"] {
-		body, _ := json.Marshal(map[string]bool{"multi": s.multi})
+	if s.set["single"] {
+		body, _ := json.Marshal(map[string]bool{"multi": !s.single})
 		resp, err := post(ctx, opts.Server, "/api/multi", "application/json", body)
 		if err != nil {
 			return err

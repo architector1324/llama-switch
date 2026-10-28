@@ -156,7 +156,7 @@ func fakeHandler(kind string, args []string) http.Handler {
 			}
 			fmt.Fprint(w, "data: [DONE]\n\n")
 
-		case "/v1/images/generations":
+		case "/v1/images/generations", "/v1/images/edits":
 			echo["data"] = []map[string]any{{"b64_json": base64.StdEncoding.EncodeToString([]byte("fake image"))}}
 			echo["output_format"] = "png"
 			send(echo)

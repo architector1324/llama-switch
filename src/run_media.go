@@ -42,13 +42,78 @@ func deliver(opts runOptions, data []byte, ext string, out, errOut io.Writer) (s
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return "", err
 	}
-	// Into the terminal, or out of the way of a pipe.
-	note := out
-	if !opts.Styled {
-		note = errOut
-	}
-	fmt.Fprintf(note, "Saved %s\n", path)
+	fmt.Fprintf(noteWriter(opts, out, errOut), "Saved %s\n", path)
 	return path, nil
+}
+
+// Where a note about the result goes: into the terminal, or out of the way of
+// a pipe that carries the result itself.
+func noteWriter(opts runOptions, out, errOut io.Writer) io.Writer {
+	if opts.Styled {
+		return out
+	}
+	return errOut
+}
+
+var imageExts = map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".webp": true, ".bmp": true}
+
+// Image files named in a message come out of its text and go with the
+// request, the way ollama attaches them: a path, quoted, with its spaces
+// escaped, or dragged in as a file:// URL. A word that only looks like a file
+// name ("logo.png style") stays text; a path to nothing is an error rather
+// than a prompt nobody meant.
+func extractImages(text string) (string, []string, error) {
+	type span struct{ start, end int }
+	var cut []span
+	var paths []string
+
+	for i := 0; i < len(text); {
+		if text[i] == ' ' || text[i] == '\t' || text[i] == '\n' || text[i] == '\r' {
+			i++
+			continue
+		}
+		start := i
+		if q := text[i]; q == '\'' || q == '"' {
+			if j := strings.IndexByte(text[i+1:], q); j >= 0 {
+				i += j + 2
+			} else {
+				i = len(text)
+			}
+		} else {
+			for i < len(text) && !strings.ContainsRune(" \t\n\r", rune(text[i])) {
+				if text[i] == '\\' {
+					i++
+				}
+				i++
+			}
+			i = min(i, len(text))
+		}
+
+		word := text[start:i]
+		path := unquotePath(word)
+		if !imageExts[strings.ToLower(filepath.Ext(path))] {
+			continue
+		}
+		if st, err := os.Stat(path); err == nil && st.Mode().IsRegular() {
+			cut = append(cut, span{start, i})
+			paths = append(paths, path)
+		} else if strings.ContainsAny(word, `/\`) || strings.HasPrefix(word, "~") {
+			return "", nil, fmt.Errorf("%s: no such image", path)
+		}
+	}
+
+	if len(cut) == 0 {
+		return strings.TrimSpace(text), nil, nil
+	}
+	var rest strings.Builder
+	last := 0
+	for _, c := range cut {
+		rest.WriteString(text[last:c.start])
+		rest.WriteByte(' ')
+		last = c.end
+	}
+	rest.WriteString(text[last:])
+	return strings.Join(strings.Fields(rest.String()), " "), paths, nil
 }
 
 // model-20261028-221530.png, numbered on if that is taken.
@@ -63,18 +128,91 @@ func freshName(model, ext string) string {
 	}
 }
 
+// What both image routes answer with.
+type imageAnswer struct {
+	Data []struct {
+		B64JSON string `json:"b64_json"`
+	} `json:"data"`
+	OutputFormat string `json:"output_format"`
+}
+
+// A prompt draws a new image; image files named in it, or given with --image,
+// are edited by it instead.
 func generateImage(ctx context.Context, opts runOptions, prompt string, out, errOut io.Writer) error {
 	started := time.Now()
-	req := map[string]any{"model": opts.Model, "prompt": prompt, "n": 1, "output_format": "png"}
-	var res struct {
-		Data []struct {
-			B64JSON string `json:"b64_json"`
-		} `json:"data"`
-		OutputFormat string `json:"output_format"`
-	}
-	if err := runJSON(ctx, opts, errOut, "/v1/images/generations", req, &res); err != nil {
+	prompt, found, err := extractImages(prompt)
+	if err != nil {
 		return err
 	}
+	for _, p := range found {
+		fmt.Fprintf(noteWriter(opts, out, errOut), "Added image %s\n", p)
+	}
+	images := append(append([]string{}, opts.Images...), found...)
+
+	var res imageAnswer
+	switch {
+	case len(images) == 0 && opts.Mask != "":
+		return errors.New("--mask needs an image to apply to")
+	case len(images) == 0:
+		req := map[string]any{"model": opts.Model, "prompt": prompt, "n": 1, "output_format": "png"}
+		err = runJSON(ctx, opts, errOut, "/v1/images/generations", req, &res)
+	case prompt == "":
+		return errors.New("say what to do with the image")
+	default:
+		err = editImage(ctx, opts, prompt, images, errOut, &res)
+	}
+	if err != nil {
+		return err
+	}
+	return saveImage(opts, res, started, out, errOut)
+}
+
+// The edit route takes the images as a multipart upload, the way OpenAI's does.
+func editImage(ctx context.Context, opts runOptions, prompt string, images []string, errOut io.Writer, res *imageAnswer) error {
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	mw.WriteField("model", opts.Model)
+	mw.WriteField("prompt", prompt)
+	mw.WriteField("n", "1")
+	mw.WriteField("output_format", "png")
+	attach := func(field, path string) error {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		fw, _ := mw.CreateFormFile(field, filepath.Base(path))
+		_, err = fw.Write(data)
+		return err
+	}
+	for _, p := range images {
+		if err := attach("image[]", p); err != nil {
+			return err
+		}
+	}
+	if opts.Mask != "" {
+		if err := attach("mask", opts.Mask); err != nil {
+			return err
+		}
+	}
+	mw.Close()
+
+	spin := startSpinner(opts.Spinner, errOut, progress(opts))
+	defer spin.stop()
+	resp, err := post(ctx, opts.Server, "/v1/images/edits", mw.FormDataContentType(), body.Bytes())
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if err := json.NewDecoder(resp.Body).Decode(res); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("unreadable answer: %v", err)
+	}
+	return nil
+}
+
+func saveImage(opts runOptions, res imageAnswer, started time.Time, out, errOut io.Writer) error {
 	if len(res.Data) == 0 {
 		return errors.New("the answer carries no image")
 	}

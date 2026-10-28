@@ -564,3 +564,177 @@ func TestSystemPromptLeadsEveryRequest(t *testing.T) {
 		t.Error("--system accepted for an image model")
 	}
 }
+
+// --- Editing images ---
+
+func TestExtractImages(t *testing.T) {
+	dir := t.TempDir()
+	cat := filepath.Join(dir, "cat.png")
+	spaced := filepath.Join(dir, "my dog.JPG")
+	notes := filepath.Join(dir, "notes.txt")
+	for _, p := range []string{cat, spaced, notes} {
+		os.WriteFile(p, []byte("x"), 0o600)
+	}
+	escaped := strings.ReplaceAll(spaced, " ", `\ `)
+	url := "file://" + strings.ReplaceAll(spaced, " ", "%20")
+
+	for _, tc := range []struct {
+		in, prompt string
+		paths      []string
+	}{
+		{"a red cat", "a red cat", nil},
+		{"make it black " + cat, "make it black", []string{cat}},
+		{cat + "  make it   black", "make it black", []string{cat}},
+		{"'" + spaced + "' add a hat", "add a hat", []string{spaced}},
+		{`"` + spaced + `" add a hat`, "add a hat", []string{spaced}},
+		{escaped + " add a hat", "add a hat", []string{spaced}},
+		{url + " add a hat", "add a hat", []string{spaced}},
+		{"merge " + cat + " and " + spaced[:len(dir)] + "/my\\ dog.JPG", "merge and", []string{cat, spaced}},
+		// Only images, and only files: the rest is the prompt.
+		{"rewrite " + notes, "rewrite " + notes, nil},
+		{"a logo.png style poster", "a logo.png style poster", nil},
+	} {
+		prompt, paths, err := extractImages(tc.in)
+		if err != nil || prompt != tc.prompt || fmt.Sprint(paths) != fmt.Sprint(tc.paths) {
+			t.Errorf("extractImages(%q) = %q %v %v, want %q %v", tc.in, prompt, paths, err, tc.prompt, tc.paths)
+		}
+	}
+
+	if _, _, err := extractImages("fix " + filepath.Join(dir, "gone.png")); err == nil ||
+		!strings.HasSuffix(err.Error(), "gone.png: no such image") {
+		t.Errorf("missing image: %v", err)
+	}
+}
+
+type editCall struct {
+	model, prompt string
+	images        []string // file names, in order
+	mask          string
+}
+
+func editEndpoint(t *testing.T, pic []byte) (string, *[]editCall, *int) {
+	t.Helper()
+	var calls []editCall
+	generations := 0
+	mux := http.NewServeMux()
+	answer := func(w http.ResponseWriter) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"output_format": "png",
+			"data":          []map[string]string{{"b64_json": base64.StdEncoding.EncodeToString(pic)}},
+		})
+	}
+	mux.HandleFunc("/v1/images/edits", func(w http.ResponseWriter, r *http.Request) {
+		r.ParseMultipartForm(1 << 20)
+		c := editCall{model: r.FormValue("model"), prompt: r.FormValue("prompt")}
+		for _, fh := range r.MultipartForm.File["image[]"] {
+			c.images = append(c.images, fh.Filename)
+		}
+		if fh := r.MultipartForm.File["mask"]; len(fh) > 0 {
+			c.mask = fh[0].Filename
+		}
+		calls = append(calls, c)
+		answer(w)
+	})
+	mux.HandleFunc("/v1/images/generations", func(w http.ResponseWriter, r *http.Request) {
+		generations++
+		answer(w)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv.URL, &calls, &generations
+}
+
+func TestGenerateImageEditsWhatItIsGiven(t *testing.T) {
+	pic := tinyPNG(t)
+	url, calls, generations := editEndpoint(t, pic)
+	dir := t.TempDir()
+	cat, hat, mask := filepath.Join(dir, "cat.png"), filepath.Join(dir, "hat.png"), filepath.Join(dir, "mask.png")
+	for _, p := range []string{cat, hat, mask} {
+		os.WriteFile(p, tinyPNG(t), 0o600)
+	}
+	opts := runOptions{Server: url, Model: "mage-flow-edit", Styled: true, Output: filepath.Join(dir, "out.png")}
+
+	// A path in the message.
+	var out bytes.Buffer
+	if err := generateImage(context.Background(), opts, "make the cat black "+cat, &out, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	want := editCall{model: "mage-flow-edit", prompt: "make the cat black", images: []string{"cat.png"}}
+	if len(*calls) != 1 || fmt.Sprint((*calls)[0]) != fmt.Sprint(want) {
+		t.Errorf("sent %+v, want %+v", *calls, want)
+	}
+	if !strings.HasPrefix(out.String(), "Added image "+cat+"\nSaved ") || !bytes.Equal(mustRead(t, opts.Output), pic) {
+		t.Errorf("printed %q", out.String())
+	}
+
+	// --image and --mask, with a path in the message besides.
+	opts.Images, opts.Mask = []string{hat}, mask
+	if err := generateImage(context.Background(), opts, cat+" put the hat on the cat", io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	want = editCall{model: "mage-flow-edit", prompt: "put the hat on the cat", images: []string{"hat.png", "cat.png"}, mask: "mask.png"}
+	if fmt.Sprint((*calls)[1]) != fmt.Sprint(want) {
+		t.Errorf("sent %+v, want %+v", (*calls)[1], want)
+	}
+
+	// No image: a new one is drawn.
+	opts.Images, opts.Mask = nil, ""
+	generateImage(context.Background(), opts, "a red cat", io.Discard, io.Discard)
+	if *generations != 1 || len(*calls) != 2 {
+		t.Errorf("generations %d, edits %d", *generations, len(*calls))
+	}
+
+	for _, tc := range []struct {
+		opts   runOptions
+		prompt string
+		want   string
+	}{
+		{runOptions{Server: url, Model: "m", Mask: mask}, "a cat", "--mask needs an image to apply to"},
+		{runOptions{Server: url, Model: "m"}, cat, "say what to do with the image"},
+		{runOptions{Server: url, Model: "m", Images: []string{filepath.Join(dir, "gone.png")}}, "x", "no such file"},
+	} {
+		if err := generateImage(context.Background(), tc.opts, tc.prompt, io.Discard, io.Discard); err == nil ||
+			!strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%q: %v, want %q", tc.prompt, err, tc.want)
+		}
+	}
+}
+
+func TestEditImageThroughTheServer(t *testing.T) {
+	h := newHarness(t)
+	cat := filepath.Join(t.TempDir(), "cat.png")
+	os.WriteFile(cat, tinyPNG(t), 0o600)
+	var out bytes.Buffer
+	opts := runOptions{Server: h.url, Model: "img2", ModelKey: "img2"}
+	if err := generateImage(context.Background(), opts, "black cat "+cat, &out, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	// The model is named inside the upload, and the server loads it from there.
+	if out.String() != "fake image" || h.instance("img2") == nil {
+		t.Errorf("got %q, running %v", out.String(), h.running())
+	}
+}
+
+func TestReplAttachesImages(t *testing.T) {
+	pic := tinyPNG(t)
+	url, calls, generations := editEndpoint(t, pic)
+	dir := t.TempDir()
+	cat := filepath.Join(dir, "cat.png")
+	os.WriteFile(cat, pic, 0o600)
+	wd, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(wd)
+
+	opts := runOptions{Server: url, Model: "m", Kind: "sd", Styled: true}
+	var out, errOut bytes.Buffer
+	in := "a red cat\n'" + cat + "' make it black\n/bye\n"
+	if err := repl(strings.NewReader(in), &out, &errOut, nil, newRunTask(opts, &out, &errOut)); err != nil {
+		t.Fatal(err)
+	}
+	if *generations != 1 || len(*calls) != 1 || (*calls)[0].prompt != "make it black" {
+		t.Errorf("generations %d, edits %+v", *generations, *calls)
+	}
+	if strings.Count(out.String(), "Saved ") != 2 || !strings.Contains(out.String(), "Added image "+cat) || errOut.Len() != 0 {
+		t.Errorf("out %q, err %q", out.String(), errOut.String())
+	}
+}

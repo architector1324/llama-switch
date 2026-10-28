@@ -39,8 +39,10 @@ type runOptions struct {
 	Styled       bool // stdout is a terminal
 	Spinner      bool // stderr is a terminal
 
-	Output    string // where an image or a clip goes
-	Play      bool   // play a clip once it is saved
+	Output    string   // where an image or a clip goes
+	Images    []string // sd: images to edit rather than draw anew
+	Mask      string   // sd: which part of them to edit
+	Play      bool     // play a clip once it is saved
 	Voice     string
 	Duration  float64
 	Lyrics    string
@@ -54,7 +56,8 @@ input piped in, one result; with neither and a terminal, a session.
 
 What a model does with its input depends on its type:
   llm       answers it; a session keeps the conversation
-  sd        draws it into a PNG
+  sd        draws it into a PNG; image files named in it, or with --image,
+            it edits instead
   tts       says it, into a WAV it then plays
   music     composes from it, into a WAV it then plays
   stt       transcribes the recordings named, or the audio piped in
@@ -80,6 +83,8 @@ var runFlagKinds = map[string][]string{
 	"parallel":          {"llm", "decision"},
 	"preserve-thinking": {"llm"},
 	"size":              {"sd"},
+	"image":             {"sd"},
+	"mask":              {"sd"},
 	"hires":             {"sd"},
 	"frames":            {"tts"},
 	"o":                 {"sd", "tts", "music"},
@@ -95,12 +100,15 @@ func runCommand(args []string) {
 	hide := fs.Bool("hide-thinking", false, "llm: leave the reasoning out of the answer")
 	system := fs.String("system", "", "llm: the system prompt")
 	verbose := fs.Bool("verbose", false, "print timings and counts after each result")
-	output := fs.String("o", "", "sd, tts, music: write the result to this file")
+	output := fs.String("o", "", "sd, tts, music: write the result to this `file`")
 	noPlay := fs.Bool("no-play", false, "tts, music: save the audio without playing it")
 	voice := fs.String("voice", "", "tts: the voice to speak with")
 	duration := fs.Float64("duration", 0, "music: length in seconds (default: the model's)")
 	lyrics := fs.String("lyrics", "", "music: lyrics to sing")
-	questions := fs.String("questions", "", "decision: JSON file of the questions to ask")
+	questions := fs.String("questions", "", "decision: a JSON `file` of the questions to ask")
+	var images fileList
+	fs.Var(&images, "image", "sd: an image `file` to edit; give it again for several")
+	mask := fs.String("mask", "", "sd: a mask `file` for the part of the image to edit")
 	var s runSettings
 	fs.StringVar(&s.gpu, "gpu", "", `card(s) to run on, as the dashboard names them, or "all"; sd also takes role=card pairs: diffusion, te, vae`)
 	fs.IntVar(&s.ctx, "ctx", 0, "llm, decision: context window per slot")
@@ -146,6 +154,8 @@ func runCommand(args []string) {
 		Styled:   isTerminal(os.Stdout),
 		Spinner:  isTerminal(os.Stderr),
 		Output:   *output,
+		Images:   images,
+		Mask:     *mask,
 		Play:     !*noPlay,
 		Voice:    *voice,
 		Duration: *duration,
@@ -206,6 +216,12 @@ func runCommand(args []string) {
 		fail(err)
 	}
 }
+
+// A flag that may be given more than once, each time a file.
+type fileList []string
+
+func (l *fileList) String() string     { return strings.Join(*l, ",") }
+func (l *fileList) Set(v string) error { *l = append(*l, v); return nil }
 
 // A flag for another kind of model would be quietly ignored; say so instead.
 func checkRunFlags(set map[string]bool, model, kind string) error {
@@ -364,7 +380,8 @@ func newRunTask(opts runOptions, out, errOut io.Writer) runTask {
 	case "sd":
 		return runTask{
 			turn: func(ctx context.Context, text string) error { return generateImage(ctx, opts, text, out, errOut) },
-			hint: "Each message is a prompt for a new image.",
+			hint: "Each message is a prompt for a new image. Name an image file in it, or\n" +
+				"drag one in, and the prompt edits that image instead.",
 		}
 	case "tts":
 		return runTask{

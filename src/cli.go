@@ -286,6 +286,7 @@ type runOptions struct {
 	Server       string
 	Model        string
 	ShowThinking bool
+	Verbose      bool // timings after each answer
 	Styled       bool // stdout is a terminal
 	Spinner      bool // stderr is a terminal
 }
@@ -298,6 +299,7 @@ type chatMessage struct {
 func runCommand(args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	hide := fs.Bool("hide-thinking", false, "leave the model's reasoning out of the answer")
+	verbose := fs.Bool("verbose", false, "print token counts and timings after each answer")
 	fs.Usage = func() {
 		fmt.Fprint(fs.Output(), `Usage: llmsw run [flags] MODEL [PROMPT]
 
@@ -322,6 +324,7 @@ Flags:
 	opts := runOptions{
 		Server:  serverURL(),
 		Model:   model,
+		Verbose: *verbose,
 		Styled:  isTerminal(os.Stdout),
 		Spinner: isTerminal(os.Stderr),
 	}
@@ -366,6 +369,8 @@ Use """ to begin and end a message that spans lines.
 Ctrl+C stops the answer being written.
 `
 
+const replPrompt = "> "
+
 // An interactive session: the conversation so far goes with every message.
 func repl(opts runOptions, in io.Reader, out, errOut io.Writer, interrupts <-chan os.Signal) error {
 	br := bufio.NewReader(in)
@@ -383,14 +388,14 @@ func repl(opts runOptions, in io.Reader, out, errOut io.Writer, interrupts <-cha
 				if cancel != nil {
 					cancel()
 				} else {
-					fmt.Fprint(out, "\nUse Ctrl + d or /bye to exit.\n>>> ")
+					fmt.Fprint(out, "\nUse Ctrl + d or /bye to exit.\n"+replPrompt)
 				}
 			}
 		}()
 	}
 
 	for {
-		fmt.Fprint(out, ">>> ")
+		fmt.Fprint(out, replPrompt)
 		text, err := readMessage(br, out)
 		if err != nil {
 			fmt.Fprintln(out)
@@ -483,7 +488,12 @@ func readMessage(br *bufio.Reader, out io.Writer) (string, error) {
 func chat(ctx context.Context, opts runOptions, messages []chatMessage, out, errOut io.Writer) (string, error) {
 	body, _ := json.Marshal(map[string]any{
 		"model": opts.Model, "messages": messages, "stream": true,
+		// The last event then carries the token counts, and from llama-server the timings too.
+		"stream_options": map[string]any{"include_usage": true},
 	})
+	started := time.Now()
+	var usage *chatUsage
+	var timings *chatTimings
 
 	spin := startSpinner(opts.Spinner, errOut)
 	defer spin.stop()
@@ -516,11 +526,19 @@ func chat(ctx context.Context, opts runOptions, messages []chatMessage, out, err
 				Error *struct {
 					Message string `json:"message"`
 				} `json:"error"`
+				Usage   *chatUsage   `json:"usage"`
+				Timings *chatTimings `json:"timings"`
 			}
 			if json.Unmarshal([]byte(data), &ev) == nil {
 				if ev.Error != nil {
 					spin.stop()
 					return p.answer.String(), errors.New(ev.Error.Message)
+				}
+				if ev.Usage != nil {
+					usage = ev.Usage
+				}
+				if ev.Timings != nil {
+					timings = ev.Timings
 				}
 				for _, c := range ev.Choices {
 					if r := c.Delta.ReasoningContent + c.Delta.Reasoning; r != "" {
@@ -541,7 +559,70 @@ func chat(ctx context.Context, opts runOptions, messages []chatMessage, out, err
 			return p.answer.String(), readErr
 		}
 	}
+
+	p.finish()
+	spin.stop()
+	if opts.Verbose {
+		printStats(errOut, time.Since(started), usage, timings)
+	}
 	return p.answer.String(), nil
+}
+
+type chatUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+}
+
+// What llama-server reports about one answer, in its last event.
+type chatTimings struct {
+	CacheN             int     `json:"cache_n"`
+	PromptN            int     `json:"prompt_n"`
+	PromptMs           float64 `json:"prompt_ms"`
+	PromptPerSecond    float64 `json:"prompt_per_second"`
+	PredictedN         int     `json:"predicted_n"`
+	PredictedMs        float64 `json:"predicted_ms"`
+	PredictedPerSecond float64 `json:"predicted_per_second"`
+	DraftN             int     `json:"draft_n"`
+	DraftNAccepted     int     `json:"draft_n_accepted"`
+}
+
+func milliseconds(ms float64) time.Duration {
+	return time.Duration(ms * float64(time.Millisecond))
+}
+
+// The summary ollama's --verbose prints, from the engine's own figures where it
+// gives them. Load duration is whatever the request spent before the engine
+// took the prompt: the load itself when the model was not up, next to nothing
+// when it was.
+func printStats(w io.Writer, total time.Duration, usage *chatUsage, t *chatTimings) {
+	line := func(label, format string, a ...any) {
+		fmt.Fprintf(w, "%-22s"+format+"\n", append([]any{label + ":"}, a...)...)
+	}
+	round := func(d time.Duration) time.Duration { return d.Round(100 * time.Microsecond) }
+
+	line("total duration", "%v", round(total))
+	switch {
+	case t != nil:
+		if load := total - milliseconds(t.PromptMs+t.PredictedMs); load > 0 {
+			line("load duration", "%v", round(load))
+		}
+		line("prompt eval count", "%d token(s)", t.PromptN)
+		if t.CacheN > 0 {
+			line("prompt cache", "%d token(s)", t.CacheN)
+		}
+		line("prompt eval duration", "%v", round(milliseconds(t.PromptMs)))
+		line("prompt eval rate", "%.2f tokens/s", t.PromptPerSecond)
+		line("eval count", "%d token(s)", t.PredictedN)
+		line("eval duration", "%v", round(milliseconds(t.PredictedMs)))
+		line("eval rate", "%.2f tokens/s", t.PredictedPerSecond)
+		if t.DraftN > 0 {
+			line("draft accepted", "%d/%d (%.0f%%)", t.DraftNAccepted, t.DraftN,
+				100*float64(t.DraftNAccepted)/float64(t.DraftN))
+		}
+	case usage != nil:
+		line("prompt eval count", "%d token(s)", usage.PromptTokens)
+		line("eval count", "%d token(s)", usage.CompletionTokens)
+	}
 }
 
 // The server gives up on a request after a minute of loading, not on the

@@ -183,6 +183,84 @@ func TestRunReportsAnErrorInTheStream(t *testing.T) {
 	}
 }
 
+func TestRunVerbosePrintsTimings(t *testing.T) {
+	// The closing event as llama-server sends it: no choices, usage and timings.
+	final := `{"choices":[],"usage":{"completion_tokens":4,"prompt_tokens":18},` +
+		`"timings":{"cache_n":6,"prompt_n":18,"prompt_ms":86.662,"prompt_per_second":207.70349,` +
+		`"predicted_n":4,"predicted_ms":42.556,"predicted_per_second":70.49534,"draft_n":4,"draft_n_accepted":3}}`
+	// A third of a second before the engine starts, as if it were loading.
+	reply := sse(delta("content", "Hi"), final)
+	s, url := scripted(t, func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(300 * time.Millisecond)
+		reply(w, r)
+	})
+
+	var out, errOut bytes.Buffer
+	if _, err := chat(context.Background(), runOptions{Server: url, Model: "m", Verbose: true},
+		[]chatMessage{{"user", "hi"}}, &out, &errOut); err != nil {
+		t.Fatal(err)
+	}
+	// Total less what the engine says it spent on the prompt and the answer.
+	var total, load time.Duration
+	for _, l := range strings.Split(errOut.String(), "\n") {
+		if v, ok := strings.CutPrefix(l, "total duration:"); ok {
+			total, _ = time.ParseDuration(strings.TrimSpace(v))
+		}
+		if v, ok := strings.CutPrefix(l, "load duration:"); ok {
+			load, _ = time.ParseDuration(strings.TrimSpace(v))
+		}
+	}
+	if total < 300*time.Millisecond || (total-load-129218*time.Microsecond).Abs() > time.Millisecond {
+		t.Errorf("total %v, load %v: load must be total minus 129.2ms of engine time", total, load)
+	}
+	// The answer stays clean for a pipe: the figures go to stderr.
+	if out.String() != "Hi\n" {
+		t.Errorf("stdout %q", out.String())
+	}
+	for _, want := range []string{
+		"total duration:       ", "load duration:        ",
+		"prompt eval count:    18 token(s)\n", "prompt cache:         6 token(s)\n",
+		"prompt eval duration: 86.7ms\n", "prompt eval rate:     207.70 tokens/s\n",
+		"eval count:           4 token(s)\n", "eval duration:        42.6ms\n",
+		"eval rate:            70.50 tokens/s\n", "draft accepted:       3/4 (75%)\n",
+	} {
+		if !strings.Contains(errOut.String(), want) {
+			t.Errorf("stats lack %q:\n%s", want, errOut.String())
+		}
+	}
+	if sent := s.sent(); len(sent) != 1 {
+		t.Fatalf("sent %v", sent)
+	}
+
+	// Not asked for, not printed; another engine's counts without timings.
+	errOut.Reset()
+	chat(context.Background(), runOptions{Server: url, Model: "m"}, []chatMessage{{"user", "hi"}}, io.Discard, &errOut)
+	if errOut.Len() != 0 {
+		t.Errorf("stats without --verbose: %q", errOut.String())
+	}
+	_, url = scripted(t, sse(delta("content", "Hi"), `{"choices":[],"usage":{"completion_tokens":2,"prompt_tokens":5}}`))
+	errOut.Reset()
+	chat(context.Background(), runOptions{Server: url, Model: "m", Verbose: true},
+		[]chatMessage{{"user", "hi"}}, io.Discard, &errOut)
+	if !strings.Contains(errOut.String(), "prompt eval count:    5 token(s)\neval count:           2 token(s)\n") ||
+		strings.Contains(errOut.String(), "rate") {
+		t.Errorf("usage only: %q", errOut.String())
+	}
+}
+
+func TestRunAsksForUsage(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&body)
+		sse(delta("content", "ok"))(w, r)
+	}))
+	defer srv.Close()
+	chat(context.Background(), runOptions{Server: srv.URL, Model: "m"}, []chatMessage{{"user", "hi"}}, io.Discard, io.Discard)
+	if opts, _ := body["stream_options"].(map[string]any); opts["include_usage"] != true || body["stream"] != true {
+		t.Errorf("request %v", body)
+	}
+}
+
 func TestReplKeepsTheConversation(t *testing.T) {
 	s, url := scripted(t, sse(delta("content", "ok")))
 	input := strings.Join([]string{
@@ -205,7 +283,7 @@ func TestReplKeepsTheConversation(t *testing.T) {
 	if fmt.Sprint(sent) != fmt.Sprint(want) {
 		t.Errorf("sent\n%v\nwant\n%v", sent, want)
 	}
-	for _, s := range []string{">>> ", "... ", "Cleared session context",
+	for _, s := range []string{"\n> ", "... ", "Cleared session context",
 		"Unknown command '/nope'. Type /? for help", "/clear    forget"} {
 		if !strings.Contains(out.String(), s) {
 			t.Errorf("output lacks %q:\n%s", s, out.String())

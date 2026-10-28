@@ -61,6 +61,10 @@ func devicePCIAddresses() []string {
 	if err != nil {
 		return nil
 	}
+	return parsePCIAddresses(out)
+}
+
+func parsePCIAddresses(out string) []string {
 	var addrs []string
 	for _, m := range reVkUUID.FindAllStringSubmatch(out, -1) {
 		addrs = append(addrs, fmt.Sprintf("0000:%s:%s.0", m[1], m[2]))
@@ -84,6 +88,13 @@ func listDevices(refresh bool) []Device {
 		fmt.Printf("[Service] Could not list devices: %v\n", err)
 		return []Device{}
 	}
+	devices := parseDeviceList(out)
+	labelDevices(devices, devicePCIAddresses())
+	devicesCache = devices
+	return devices
+}
+
+func parseDeviceList(out string) []Device {
 	devices := []Device{}
 	for _, line := range splitLines(out) {
 		m := reDevice.FindStringSubmatch(line)
@@ -94,17 +105,19 @@ func listDevices(refresh bool) []Device {
 		free, _ := strconv.Atoi(m[4])
 		devices = append(devices, Device{ID: m[1], Name: m[2], TotalMiB: total, FreeMiB: free})
 	}
-
-	pci := devicePCIAddresses()
-	if len(pci) == len(devices) {
-		for i := range devices {
-			addr := pci[i]
-			devices[i].PCI = &addr
-		}
-	}
-
-	devicesCache = devices
 	return devices
+}
+
+// Addresses go on only when there is one per device: a count that differs means
+// the two tools disagree about the cards, and a wrong label is worse than none.
+func labelDevices(devices []Device, pci []string) {
+	if len(pci) != len(devices) {
+		return
+	}
+	for i := range devices {
+		addr := pci[i]
+		devices[i].PCI = &addr
+	}
 }
 
 // ${DEVICES} or ${DEVICES:<flags the profile uses by default>}. Every backend

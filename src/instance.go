@@ -394,6 +394,64 @@ func replaceSubmatchFunc(re *regexp.Regexp, s string, fn func(groups []string) s
 	return b.String()
 }
 
+// The values a profile's placeholders take for one start, already validated.
+type profileValues struct {
+	Kind, Host, Devices  string
+	Port, Ctx, Parallel  int
+	Frames               int
+	Width, Height        string
+	Hires, PreserveThink bool
+}
+
+// The command line a profile stands for, placeholders filled in.
+func expandProfile(tmpl string, v profileValues) string {
+	port := strconv.Itoa(v.Port)
+	// -c is the whole KV pool and llama.cpp hands each slot an equal share of it, so
+	// the window the user asked for is per slot and the pool has to be N times it.
+	ctxTotal := strconv.Itoa(v.Ctx * v.Parallel)
+	frames := strconv.Itoa(v.Frames)
+	parallel := strconv.Itoa(v.Parallel)
+	preserveFlag := "--no-reasoning-preserve"
+	if v.PreserveThink {
+		preserveFlag = "--reasoning-preserve"
+	}
+	hiresFlag := ""
+	if v.Hires {
+		hiresFlag = "--hires"
+	}
+
+	cmd := strings.ReplaceAll(tmpl, "${PORT}", port)
+	cmd = strings.ReplaceAll(cmd, "${CTX}", ctxTotal)
+	cmd = strings.ReplaceAll(cmd, "${FRAMES}", frames)
+	cmd = replaceSubmatchFunc(reHires, cmd, func(g []string) string {
+		if v.Hires {
+			return g[1]
+		}
+		return ""
+	})
+	cmd = strings.ReplaceAll(cmd, "${HIRES}", hiresFlag)
+	cmd = strings.ReplaceAll(cmd, "${WIDTH}", v.Width)
+	cmd = strings.ReplaceAll(cmd, "${HEIGHT}", v.Height)
+	cmd = strings.ReplaceAll(cmd, "${HOST}", v.Host)
+	cmd = strings.ReplaceAll(cmd, "${PRESERVE_THINK}", preserveFlag)
+	cmd = strings.ReplaceAll(cmd, "${PARALLEL}", parallel)
+	// The draft model follows --device unless told otherwise, so llm needs no
+	// second flag for it.
+	cmd = replaceSubmatchFunc(reDevices, cmd, func(g []string) string {
+		return deviceFlags(v.Devices, v.Kind, g[1])
+	})
+	// Bare forms, for configs written without the braces.
+	cmd = strings.ReplaceAll(cmd, "$PORT", port)
+	cmd = strings.ReplaceAll(cmd, "$CTX", ctxTotal)
+	cmd = strings.ReplaceAll(cmd, "$FRAMES", frames)
+	cmd = strings.ReplaceAll(cmd, "$WIDTH", v.Width)
+	cmd = strings.ReplaceAll(cmd, "$HEIGHT", v.Height)
+	cmd = strings.ReplaceAll(cmd, "$HOST", v.Host)
+	cmd = strings.ReplaceAll(cmd, "$PRESERVE_THINK", preserveFlag)
+	cmd = strings.ReplaceAll(cmd, "$PARALLEL", parallel)
+	return cmd
+}
+
 func orStr(p *string, def string) string {
 	if p == nil {
 		return def
@@ -491,10 +549,6 @@ func startModelServer(req StartRequest, replaceOnly bool) (StartResult, error) {
 	if req.PreserveThink != nil {
 		preserveThink = *req.PreserveThink
 	}
-	preserveFlag := "--no-reasoning-preserve"
-	if preserveThink {
-		preserveFlag = "--reasoning-preserve"
-	}
 
 	// Same precedence as ctx. Goes straight onto a shell command line.
 	parallel := firstNonZero(selParallel, defParallel)
@@ -543,51 +597,24 @@ func startModelServer(req StartRequest, replaceOnly bool) (StartResult, error) {
 		devices = strings.Join(picked, ",")
 	}
 
-	// -c is the whole KV pool and llama.cpp hands each slot an equal share of it, so
-	// the window the user asked for is per slot and the pool has to be N times it.
-	ctxTotal := strconv.Itoa(ctx * parallel)
-
 	port, err := findFreePort()
 	if err != nil {
 		return StartResult{}, err
 	}
-	portStr := strconv.Itoa(port)
-	framesStr := strconv.Itoa(frames)
-	parallelStr := strconv.Itoa(parallel)
 
-	cmdStr := strings.ReplaceAll(cmdTemplate, "${PORT}", portStr)
-	cmdStr = strings.ReplaceAll(cmdStr, "${CTX}", ctxTotal)
-	cmdStr = strings.ReplaceAll(cmdStr, "${FRAMES}", framesStr)
-	cmdStr = replaceSubmatchFunc(reHires, cmdStr, func(g []string) string {
-		if hires {
-			return g[1]
-		}
-		return ""
+	cmdStr := expandProfile(cmdTemplate, profileValues{
+		Kind:          kind,
+		Host:          host,
+		Port:          port,
+		Ctx:           ctx,
+		Parallel:      parallel,
+		Frames:        frames,
+		Width:         width,
+		Height:        height,
+		Hires:         hires,
+		PreserveThink: preserveThink,
+		Devices:       devices,
 	})
-	hiresFlag := ""
-	if hires {
-		hiresFlag = "--hires"
-	}
-	cmdStr = strings.ReplaceAll(cmdStr, "${HIRES}", hiresFlag)
-	cmdStr = strings.ReplaceAll(cmdStr, "${WIDTH}", width)
-	cmdStr = strings.ReplaceAll(cmdStr, "${HEIGHT}", height)
-	cmdStr = strings.ReplaceAll(cmdStr, "${HOST}", host)
-	cmdStr = strings.ReplaceAll(cmdStr, "${PRESERVE_THINK}", preserveFlag)
-	cmdStr = strings.ReplaceAll(cmdStr, "${PARALLEL}", parallelStr)
-	// The draft model follows --device unless told otherwise, so llm needs no
-	// second flag for it.
-	cmdStr = replaceSubmatchFunc(reDevices, cmdStr, func(g []string) string {
-		return deviceFlags(devices, kind, g[1])
-	})
-	// Bare forms, for configs written without the braces.
-	cmdStr = strings.ReplaceAll(cmdStr, "$PORT", portStr)
-	cmdStr = strings.ReplaceAll(cmdStr, "$CTX", ctxTotal)
-	cmdStr = strings.ReplaceAll(cmdStr, "$FRAMES", framesStr)
-	cmdStr = strings.ReplaceAll(cmdStr, "$WIDTH", width)
-	cmdStr = strings.ReplaceAll(cmdStr, "$HEIGHT", height)
-	cmdStr = strings.ReplaceAll(cmdStr, "$HOST", host)
-	cmdStr = strings.ReplaceAll(cmdStr, "$PRESERVE_THINK", preserveFlag)
-	cmdStr = strings.ReplaceAll(cmdStr, "$PARALLEL", parallelStr)
 
 	fmt.Printf("Starting model %s on %s:%d with command: %s\n", modelKey, host, port, cmdStr)
 

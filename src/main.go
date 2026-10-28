@@ -96,24 +96,56 @@ func routes() http.Handler {
 }
 
 func main() {
+	if len(os.Args) < 2 {
+		fmt.Fprint(os.Stderr, usageText)
+		os.Exit(2)
+	}
+	switch cmd, args := os.Args[1], os.Args[2:]; cmd {
+	case "serve":
+		serveCommand(args)
+	case "run":
+		runCommand(args)
+	case "list", "ls":
+		listCommand(args)
+	case "ps", "status":
+		psCommand(args)
+	case "help", "-h", "-help", "--help":
+		fmt.Print(usageText)
+	default:
+		fmt.Fprintf(os.Stderr, "llmsw: unknown command %q\n\n%s", cmd, usageText)
+		os.Exit(2)
+	}
+}
+
+func serveCommand(args []string) {
 	var (
 		host, configPath    string
 		port, ctx, parallel int
 		watch               bool
 	)
-	flag.StringVar(&host, "H", "localhost", "interface for the UI and for the engines it launches")
-	flag.StringVar(&host, "host", "localhost", "same as -H")
-	flag.IntVar(&port, "p", 11435, "UI port (engines get a free port each)")
-	flag.IntVar(&port, "port", 11435, "same as -p")
-	flag.IntVar(&ctx, "c", 4096, "default context window, per slot")
-	flag.IntVar(&ctx, "ctx", 4096, "same as -c")
-	flag.IntVar(&parallel, "np", 1, "default server slots per model")
-	flag.IntVar(&parallel, "parallel", 1, "same as -np")
-	flag.StringVar(&configPath, "f", "config.yaml", "config file path")
-	flag.StringVar(&configPath, "config", "config.yaml", "same as -f")
-	flag.BoolVar(&watch, "w", false, "reload the config when it changes on disk")
-	flag.BoolVar(&watch, "watch", false, "same as -w")
-	flag.Parse()
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	fs.Usage = func() {
+		fmt.Fprint(fs.Output(), "Usage: llmsw serve [flags]\n\nStart the server and its dashboard.\n\nFlags:\n")
+		fs.PrintDefaults()
+	}
+	fs.StringVar(&host, "H", "localhost", "interface for the UI and for the engines it launches")
+	fs.StringVar(&host, "host", "localhost", "same as -H")
+	fs.IntVar(&port, "p", 11435, "UI port (engines get a free port each)")
+	fs.IntVar(&port, "port", 11435, "same as -p")
+	fs.IntVar(&ctx, "c", 4096, "default context window, per slot")
+	fs.IntVar(&ctx, "ctx", 4096, "same as -c")
+	fs.IntVar(&parallel, "np", 1, "default server slots per model")
+	fs.IntVar(&parallel, "parallel", 1, "same as -np")
+	fs.StringVar(&configPath, "f", "config.yaml", "config file path")
+	fs.StringVar(&configPath, "config", "config.yaml", "same as -f")
+	fs.BoolVar(&watch, "w", false, "reload the config when it changes on disk")
+	fs.BoolVar(&watch, "watch", false, "same as -w")
+	fs.Parse(args)
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "llmsw serve: unexpected argument %q\n", fs.Arg(0))
+		fs.Usage()
+		os.Exit(2)
+	}
 
 	state.defaultCtx = ctx
 	state.defaultParallel = parallel

@@ -208,6 +208,8 @@ git diff | llmsw run qwen3.6:35b "Write a commit message for this"
 
 A model's reasoning is shown dimmed, between `Thinking...` and `...done thinking.`, while the answer goes to a terminal; `--hide-thinking` leaves it out, and so does sending the output anywhere else. A model that takes longer to load than the server's one-minute wait is simply waited for.
 
+`--verbose` follows each answer with the figures llama-server reports for it, the way ollama's does: prompt and generation token counts, durations and rates, prompt cache hits and accepted draft tokens. Load duration is the rest of the request's time, the model's load when it was not up. They go to stderr, so a pipe still gets the answer alone.
+
 ### As a systemd service
 
 The repository carries a user unit, [llama-switch.service](llama-switch.service), that runs `llmsw serve` from `~/.local/bin` on `~/.config/llama-switch/config.yaml` with `--watch`. Add whatever flags you need to its `ExecStart` (`--host 0.0.0.0` to reach the dashboard from other machines), then:

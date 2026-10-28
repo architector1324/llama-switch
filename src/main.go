@@ -117,6 +117,49 @@ func main() {
 	}
 }
 
+// The short names serve takes besides the long ones, llama.cpp's own.
+var serveShortFlags = map[string]string{
+	"host": "H", "port": "p", "ctx": "c", "parallel": "np", "config": "f", "watch": "w",
+}
+
+// Like flag.PrintDefaults, but with two dashes before a long name, the way the
+// docs and the error messages write flags; a short alias shares its long
+// name's line.
+func printFlags(fs *flag.FlagSet, short map[string]string) {
+	aliases := map[string]bool{}
+	for _, s := range short {
+		aliases[s] = true
+	}
+	out := fs.Output()
+	fs.VisitAll(func(f *flag.Flag) {
+		if aliases[f.Name] {
+			return
+		}
+		names := "--" + f.Name
+		if len(f.Name) == 1 {
+			names = "-" + f.Name
+		}
+		if s, ok := short[f.Name]; ok {
+			names = "-" + s + ", " + names
+		}
+		typ, usage := flag.UnquoteUsage(f)
+		if typ != "" {
+			names += " " + typ
+		}
+		fmt.Fprintf(out, "  %s\n    \t%s", names, strings.ReplaceAll(usage, "\n", "\n    \t"))
+		switch f.DefValue {
+		case "", "0", "false":
+		default:
+			if typ == "string" {
+				fmt.Fprintf(out, " (default %q)", f.DefValue)
+			} else {
+				fmt.Fprintf(out, " (default %s)", f.DefValue)
+			}
+		}
+		fmt.Fprintln(out)
+	})
+}
+
 func serveCommand(args []string) {
 	var (
 		host, configPath    string
@@ -126,20 +169,18 @@ func serveCommand(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	fs.Usage = func() {
 		fmt.Fprint(fs.Output(), "Usage: llmsw serve [flags]\n\nStart the server and its dashboard.\n\nFlags:\n")
-		fs.PrintDefaults()
+		printFlags(fs, serveShortFlags)
 	}
-	fs.StringVar(&host, "H", "localhost", "interface for the UI and for the engines it launches")
-	fs.StringVar(&host, "host", "localhost", "same as -H")
-	fs.IntVar(&port, "p", 11435, "UI port (engines get a free port each)")
-	fs.IntVar(&port, "port", 11435, "same as -p")
-	fs.IntVar(&ctx, "c", 4096, "default context window, per slot")
-	fs.IntVar(&ctx, "ctx", 4096, "same as -c")
-	fs.IntVar(&parallel, "np", 1, "default server slots per model")
-	fs.IntVar(&parallel, "parallel", 1, "same as -np")
-	fs.StringVar(&configPath, "f", "config.yaml", "config file path")
-	fs.StringVar(&configPath, "config", "config.yaml", "same as -f")
-	fs.BoolVar(&watch, "w", false, "reload the config when it changes on disk")
-	fs.BoolVar(&watch, "watch", false, "same as -w")
+	fs.StringVar(&host, "host", "localhost", "interface for the UI and for the engines it launches")
+	fs.IntVar(&port, "port", 11435, "UI port (engines get a free port each)")
+	fs.IntVar(&ctx, "ctx", 4096, "default context window, per slot")
+	fs.IntVar(&parallel, "parallel", 1, "default server slots per model")
+	fs.StringVar(&configPath, "config", "config.yaml", "config file path")
+	fs.BoolVar(&watch, "watch", false, "reload the config when it changes on disk")
+	for long, short := range serveShortFlags {
+		f := fs.Lookup(long)
+		fs.Var(f.Value, short, "same as --"+long)
+	}
 	fs.Parse(args)
 	if fs.NArg() > 0 {
 		fmt.Fprintf(os.Stderr, "llmsw serve: unexpected argument %q\n", fs.Arg(0))

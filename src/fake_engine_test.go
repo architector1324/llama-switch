@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -154,6 +155,11 @@ func fakeHandler(kind string, args []string) http.Handler {
 				w.(http.Flusher).Flush()
 			}
 			fmt.Fprint(w, "data: [DONE]\n\n")
+
+		case "/v1/images/generations":
+			echo["data"] = []map[string]any{{"b64_json": base64.StdEncoding.EncodeToString([]byte("fake image"))}}
+			echo["output_format"] = "png"
+			send(echo)
 
 		case "/v1/audio/transcriptions":
 			send(map[string]any{"text": "language English<asr_text>hello", "echo": echo})

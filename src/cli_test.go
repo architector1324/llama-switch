@@ -269,7 +269,7 @@ func TestReplKeepsTheConversation(t *testing.T) {
 	}, "\n") + "\n"
 
 	var out, errOut bytes.Buffer
-	if err := repl(runOptions{Server: url, Model: "m"}, strings.NewReader(input), &out, &errOut, nil); err != nil {
+	if err := repl(strings.NewReader(input), &out, &errOut, nil, chatTask(runOptions{Server: url, Model: "m"}, &out, &errOut)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -296,7 +296,7 @@ func TestReplEndsOnEOFAndSurvivesErrors(t *testing.T) {
 		writeError(w, newErr(http.StatusNotFound, "Model m not found"))
 	})
 	var out, errOut bytes.Buffer
-	if err := repl(runOptions{Server: url, Model: "m"}, strings.NewReader("hi\nagain\n"), &out, &errOut, nil); err != nil {
+	if err := repl(strings.NewReader("hi\nagain\n"), &out, &errOut, nil, chatTask(runOptions{Server: url, Model: "m"}, &out, &errOut)); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Count(errOut.String(), "Error: Model m not found") != 2 {
@@ -347,8 +347,8 @@ func TestReplCtrlCStopsTheAnswer(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- repl(runOptions{Server: url, Model: "m"}, strings.NewReader("tell a story\nhi\n/bye\n"),
-			out, io.Discard, interrupts)
+		done <- repl(strings.NewReader("tell a story\nhi\n/bye\n"), out, io.Discard, interrupts,
+			chatTask(runOptions{Server: url, Model: "m"}, out, io.Discard))
 	}()
 	select {
 	case err := <-done:

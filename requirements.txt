@@ -1,6 +1,0 @@
-fastapi
-uvicorn
-starlette
-pydantic
-pyyaml
-httpx

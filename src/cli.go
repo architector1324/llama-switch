@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -27,6 +29,7 @@ Usage:
   llmsw run MODEL [PROMPT]     chat with a model, loading it first if needed
   llmsw list [TYPE]            models in the config (also: ls)
   llmsw ps                     models that are up (also: status)
+  llmsw stop MODEL...          unload models; --all unloads every one
 
 The client commands talk to the server at $LLMSW_HOST (default localhost:11435).
 Run "llmsw COMMAND -h" for a command's flags.
@@ -276,4 +279,85 @@ func psCommand(args []string) {
 	if err := printRunning(serverURL(), os.Stdout); err != nil {
 		fail(err)
 	}
+}
+
+func stopCommand(args []string) {
+	fs := flag.NewFlagSet("stop", flag.ExitOnError)
+	all := fs.Bool("all", false, "unload every model that is up")
+	fs.Usage = func() {
+		fmt.Fprint(fs.Output(), "Usage: llmsw stop MODEL...\n       llmsw stop --all\n\n"+
+			"Unload models, named as ps names them.\n\nFlags:\n")
+		printFlags(fs, nil)
+	}
+	fs.Parse(args)
+	// Neither would be a stop-all nobody asked for; both, a contradiction.
+	if *all == (fs.NArg() > 0) {
+		fs.Usage()
+		os.Exit(2)
+	}
+	if err := stopModels(serverURL(), fs.Args(), *all, os.Stdout); err != nil {
+		fail(err)
+	}
+}
+
+// Every name is checked before anything stops, so a typo in the list does not
+// leave half of it unloaded.
+func stopModels(server string, names []string, all bool, out io.Writer) error {
+	stop := func(query string) (int, error) {
+		resp, err := post(context.Background(), server, "/api/stop"+query, "application/json", nil)
+		if err != nil {
+			return 0, err
+		}
+		defer resp.Body.Close()
+		var res struct {
+			Stopped int `json:"stopped"`
+		}
+		err = json.NewDecoder(resp.Body).Decode(&res)
+		return res.Stopped, err
+	}
+
+	if all {
+		n, err := stop("")
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "Stopped %d model(s)\n", n)
+		return nil
+	}
+
+	models, err := fetchModels(server)
+	if err != nil {
+		return err
+	}
+	instances, err := fetchInstances(server)
+	if err != nil {
+		return err
+	}
+	up := map[string]bool{}
+	for _, i := range instances {
+		up[instanceKey(i.Model, i.Quantization)] = true
+	}
+	byName := map[string]listedModel{}
+	for _, m := range models {
+		byName[m.Name] = m
+	}
+	var keys []string
+	for _, name := range names {
+		m, ok := byName[name]
+		if !ok {
+			return fmt.Errorf("Model %s not found; `llmsw list` shows the ones there are", name)
+		}
+		if !up[instanceKey(m.Details.ParentModel, m.Details.QuantizationLevel)] {
+			return fmt.Errorf("%s is not running; `llmsw ps` shows what is", name)
+		}
+		keys = append(keys, m.Details.ParentModel)
+	}
+
+	for i, key := range keys {
+		if _, err := stop("?model=" + url.QueryEscape(key)); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "Stopped %s\n", names[i])
+	}
+	return nil
 }

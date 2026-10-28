@@ -109,6 +109,8 @@ func main() {
 		listCommand(args)
 	case "ps", "status":
 		psCommand(args)
+	case "stop":
+		stopCommand(args)
 	case "help", "-h", "-help", "--help":
 		fmt.Print(usageText)
 	default:

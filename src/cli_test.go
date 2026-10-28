@@ -428,3 +428,43 @@ func TestListAndPs(t *testing.T) {
 		t.Errorf("no server: %v", err)
 	}
 }
+
+func TestStop(t *testing.T) {
+	h := newHarness(t)
+	h.ok("POST", "/api/multi", map[string]any{"multi": true})
+	h.start(map[string]any{"model_key": "zeta", "quantization": "q8"})
+	h.start(map[string]any{"model_key": "img"})
+	h.start(map[string]any{"model_key": "voice"})
+
+	var out bytes.Buffer
+	for names, want := range map[string]string{
+		"nope":         "Model nope not found; `llmsw list` shows the ones there are",
+		"zeta":         "zeta is not running; `llmsw ps` shows what is", // the q4 is not the one up
+		"img ears":     "ears is not running; `llmsw ps` shows what is",
+		"zeta-q8 nope": "Model nope not found; `llmsw list` shows the ones there are",
+	} {
+		if err := stopModels(h.url, strings.Fields(names), false, &out); err == nil || err.Error() != want {
+			t.Errorf("stop %s: %v, want %q", names, err, want)
+		}
+	}
+	// A bad name anywhere in the list stops nothing.
+	if got := h.running(); len(got) != 3 || out.Len() != 0 {
+		t.Fatalf("after failed stops: %v, printed %q", got, out.String())
+	}
+
+	if err := stopModels(h.url, []string{"zeta-q8", "img"}, false, &out); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.running(); fmt.Sprint(got) != "[voice]" || out.String() != "Stopped zeta-q8\nStopped img\n" {
+		t.Errorf("running %v, printed %q", got, out.String())
+	}
+
+	out.Reset()
+	h.start(map[string]any{"model_key": "img"})
+	if err := stopModels(h.url, nil, true, &out); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.running(); len(got) != 0 || out.String() != "Stopped 2 model(s)\n" {
+		t.Errorf("--all: running %v, printed %q", got, out.String())
+	}
+}

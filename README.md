@@ -195,7 +195,7 @@ Besides `serve`, the binary is a client for a running server, much like ollama's
 | --- | --- |
 | `llmsw run MODEL [PROMPT]` | run a model of any type, loading it first if it is not up |
 | `llmsw list [TYPE]`, `llmsw ls` | every model in the config with its type, quant and state; `TYPE` narrows it to one section |
-| `llmsw ps`, `llmsw status` | the models that are up: state, memory, cards, context window and port |
+| `llmsw ps [MODEL...]`, `llmsw status` | the models that are up: state, memory, cards, context window and port. With names, as `ps` names them, what the dashboard shows of each: its settings, the counters for its type, and its memory by card, with the host's as RAM |
 | `llmsw stop MODEL...`, `llmsw stop --all` | unload the models named, as `ps` names them, or every one; a name that is not up stops nothing |
 | `llmsw completion fish` | the completion script for fish, [below](#shell-completion) |
 
@@ -274,7 +274,7 @@ The script asks the binary what fits as you type, through the server at `LLMSW_H
 - the commands, and the models in the config with their types;
 - after a model, only the flags for its type;
 - the server's cards for `--gpu`, and the dashboard's sizes for `--size`;
-- for `stop`, the models that are up;
+- for `ps` and `stop`, the models that are up;
 - file names where a file goes: recordings for `stt`, attachments for `llm` and `sd`, and the files that flags take.
 
 ### As a systemd service

@@ -4,11 +4,11 @@
 
 A lightweight, modern WebUI manager for running local inference servers side by side.
 
-Llama Switch puts one dashboard and one OpenAI-compatible endpoint in front of several engines: [llama.cpp](https://github.com/ggerganov/llama.cpp) for text, speech recognition, audio/vision input and decision models, [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) for images, [qwentts.cpp](https://github.com/ServeurpersoCom/qwentts.cpp) or [audio.cpp](https://github.com/0xShug0/audio.cpp) for speech synthesis, and audio.cpp for music generation. Several models can run at once, each on its own port and its own cards; with **Multi-model** off it works the old way, one model at a time.
+Llama Switch puts one dashboard and one OpenAI-compatible endpoint in front of several engines: [llama.cpp](https://github.com/ggerganov/llama.cpp) for text, speech recognition, audio/vision input and decision models, [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) for images, [qwentts.cpp](https://github.com/ServeurpersoCom/qwentts.cpp) or [audio.cpp](https://github.com/0xShug0/audio.cpp) for speech synthesis, and audio.cpp for speech recognition and music generation. Several models can run at once, each on its own port and its own cards; with **Multi-model** off it works the old way, one model at a time.
 
 ## Features
 
-- **Five kinds of model in one config**: `llm`, `sd`, `tts`, `music` and `decision` sections, shown in the UI as **Language**, **Image**, **Speech**, **Music** and **Decision**.
+- **Six kinds of model in one config**: `llm`, `sd`, `tts`, `stt`, `music` and `decision` sections, shown in the UI as **Language**, **Image**, **Speech**, **Transcription**, **Music** and **Decision**.
 - **Several models at once**: with **Multi-model** on, loading a model leaves the others running, so a language model, an image model and a voice can be up together. Off, every start stops everything else.
 - **Running tab**: every model that is up, whatever its kind. The tab is green while at least one model is loaded and red when nothing is.
 - **A dashboard per model**: click any row, running or not, and the dashboard describes that model. Every field change restarts it with the new value; whatever is set on a model that is not loaded yet is what **Load** starts it with.
@@ -17,12 +17,13 @@ Llama Switch puts one dashboard and one OpenAI-compatible endpoint in front of s
   - **Context Window** (per slot) and **Parallel Slots** for language and decision models.
   - **Preserve Thinking** for language models, **Output Size** and **Hires Fix** for image models, **Max Frames** for speech.
 - **Reset and Reset All**: a model's settings, or every section's, back to the defaults. Like any field change, a reset restarts what it applies to.
-- **Memory, as the engine reports it**: model and context memory for language and decision models, weights and compute buffer for image models, each split per card and RAM. audio.cpp prints no memory figures, so speech and music on it show none.
+- **Memory, as the engine reports it**: model and context memory for language and decision models, weights and compute buffer for image models, each split per card and RAM. audio.cpp prints no memory figures, so speech, transcription and music on it show none.
 - **Real-time counters**, per kind:
   - **Language:** generation speed (t/s), prompt speed (t/s), context usage, total tokens.
   - **Image:** step time, last image time, step progress, images generated.
   - **Speech:** speed as a multiple of realtime, last clip's length against the time it took, frames generated, clips.
   - **Decision:** time of the last decision, its prompt size, requests served.
+  - **Transcription** and **Music:** none yet.
 - **Auto-switching from the API**: a request that names a `model` loads it first, whether the name arrives in a JSON body (chat, images, speech) or in a multipart upload (transcriptions, image edits).
 - **Upstream Logs**: each model keeps its own log, and the panel names whose log it is showing.
 - **Theme Support**: built-in Dark and Light modes.
@@ -31,9 +32,10 @@ Llama Switch puts one dashboard and one OpenAI-compatible endpoint in front of s
 
 ## Prerequisites
 
-- **Python 3.8+** with `fastapi`, `uvicorn`, `pyyaml` and `httpx`.
+- **Go 1.22+**, only to build. The result is one static binary with the dashboard embedded in it; it needs nothing else at runtime.
 - **llama-server**: the binary from `llama.cpp`, in `PATH` or given by absolute path in the config. The GPU picker lists the cards that `llama-server --list-devices` reports, so this one is needed even if you only run other engines.
 - Optional, only for the sections you use: `sd-server` from `stable-diffusion.cpp`, `tts-server` from `qwentts.cpp`, `audiocpp-server` from `audio.cpp` (upstream builds it as `audiocpp_server`).
+- Optional, for the `stt` section: `ffmpeg`. audio.cpp transcribes WAV only, so any other upload (mp3 from Open WebUI, webm from a browser recording) is converted to 16 kHz mono WAV first.
 - Optional: `vulkaninfo`. With it, each card in the GPU picker is labelled with its PCI address, which is the only thing that tells two identical cards apart.
 
 ## Installation
@@ -44,14 +46,15 @@ Llama Switch puts one dashboard and one OpenAI-compatible endpoint in front of s
    cd llama-switch
    ```
 
-2. **Install Python dependencies:**
+2. **Build the binary:**
    ```bash
-   pip install fastapi uvicorn pyyaml httpx
+   cd src && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o ~/.local/bin/llama-switch .
    ```
+   The sources, dashboard included, live in `src/`; the binary goes to `~/.local/bin`, where the bundled systemd unit expects it, and runs from any directory.
 
 ## Configuration
 
-Create a `config.yaml` file in the root directory. Models are grouped into up to five sections; you can define as many models as you like in each, and leave out any section you do not use.
+Create a config file. The bundled systemd unit reads `~/.config/llama-switch/config.yaml`; started by hand, the binary reads `config.yaml` in the current directory unless `-f` names another. Models are grouped into up to six sections; you can define as many models as you like in each, and leave out any section you do not use.
 
 Each profile is one command line. The server fills in these placeholders before running it:
 
@@ -82,7 +85,7 @@ llm:
   gemma-3:
     q4_k_m: llama-server --parallel ${PARALLEL} ${DEVICES} --host ${HOST} --port ${PORT} --model /path/to/gemma-3-it-q4_k_m.gguf --mmproj /path/to/gemma-3-it-mmproj.gguf -c ${CTX} -ngl 99
 
-  # Speech recognition also runs on llama-server, so it belongs here
+  # Speech recognition on llama-server lives here; on audio.cpp it goes under stt
   qwen3-asr:
     q8: llama-server --parallel ${PARALLEL} ${DEVICES} --host ${HOST} --port ${PORT} --model /path/to/Qwen3-ASR-1.7B-Q8_0.gguf --mmproj /path/to/mmproj-Qwen3-ASR-1.7B-Q8_0.gguf -c ${CTX} -ngl 99
 
@@ -94,6 +97,11 @@ sd:
 tts:
   qwen3-tts:
     q8: tts-server --host ${HOST} --port ${PORT} --model /path/to/qwen-talker-1.7b-base-Q8_0.gguf --codec /path/to/qwen-tokenizer-12hz-Q8_0.gguf --max-new ${FRAMES}
+
+stt:
+  # Speech recognition on audio.cpp; uploads that are not WAV go through ffmpeg first
+  nemotron-asr:
+    f16: audiocpp-server --config /path/to/nemotron-asr.json --host ${HOST} --port ${PORT} ${DEVICES} --busy-timeout-ms 0
 
 music:
   minimax-music3:
@@ -111,7 +119,7 @@ decision:
 
 **Default quantization:** the **first** quant listed for a model is its default. Through the OpenAI-compatible API (`/v1/models`, `/v1/chat/completions`) that default is exposed under the bare model id (e.g. `qwen-3`), while the rest get a `-<quant>` suffix (e.g. `qwen-3-q8_k_xl`). Requesting the bare id loads the first-listed quant, so order each model's variants with the preferred one first.
 
-**Model ids are global.** If the same key appears in two sections, the first one wins, in the order `llm`, `sd`, `tts`, `music`, `decision`, and the duplicate is logged and skipped.
+**Model ids are global.** If the same key appears in two sections, the first one wins, in the order `llm`, `sd`, `tts`, `stt`, `music`, `decision`, and the duplicate is logged and skipped.
 
 **Older configs still work.** A pre-sections config that puts everything under a single `models:` key is read as the `llm` section; an explicit `llm:` section always wins over it.
 
@@ -127,11 +135,13 @@ Requests to the engines go straight to them and ignore `http_proxy`, so a system
 | --- | --- |
 | `/v1/models` | every section; each entry carries `type` and, in the ollama-style list, `kind` and `capabilities` |
 | `/v1/chat/completions`, `/v1/completions`, `/v1/responses` | `llm` |
-| `/v1/audio/transcriptions`, `/v1/audio/translations` | `llm`, these are `llama-server`'s own ASR endpoints |
+| `/v1/audio/transcriptions`, `/v1/audio/translations` | `stt` when the request names an `stt` model, or names none while one is running; otherwise `llm`, where these are `llama-server`'s own ASR endpoints |
 | `/v1/images/*` (OpenAI), `/sdapi/v1/*` (AUTOMATIC1111), `/sdcpp/v1/*` (native) | `sd` |
 | `/v1/audio/speech`, `/v1/audio/voices` | `tts` |
 | `/v1/tasks/*` | `music`, `audio.cpp`'s own generation endpoint |
 | `/v1/systemone` | `decision` |
+
+Qwen3-ASR starts its transcripts with a `language <Name><asr_text>` header. It is stripped from transcription and chat answers alike, streamed or not, so clients get the text alone.
 
 Management:
 
@@ -150,7 +160,7 @@ Management:
 
 1. **Start the server:**
    ```bash
-   python server.py --config config.yaml --watch
+   llama-switch --config config.yaml --watch
    ```
 
 2. **Open the Dashboard:**
@@ -173,6 +183,18 @@ Management:
 | `-np`, `--parallel` | `1` | default number of slots |
 | `-f`, `--config` | `config.yaml` | config file path |
 | `-w`, `--watch` | off | reload the config when it changes on disk |
+
+### As a systemd service
+
+The repository carries a user unit, [llama-switch.service](llama-switch.service), that runs `~/.local/bin/llama-switch` on `~/.config/llama-switch/config.yaml` with `--watch`. Add whatever flags you need to its `ExecStart` (`--host 0.0.0.0` to reach the dashboard from other machines), then:
+
+```bash
+cp llama-switch.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now llama-switch
+```
+
+The server's own messages, config reloads and the command line of every start among them, go to the journal: `journalctl --user -u llama-switch -f`. What the engines print is in each model's **Upstream Logs** on the dashboard.
 
 ### The microphone
 

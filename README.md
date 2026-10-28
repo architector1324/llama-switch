@@ -4,12 +4,12 @@
 
 A lightweight, modern WebUI manager for running local inference servers side by side.
 
-Llama Switch puts one dashboard and one OpenAI-compatible endpoint in front of several engines: [llama.cpp](https://github.com/ggerganov/llama.cpp) for text, speech recognition, audio/vision input and decision models, [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) for images, [qwentts.cpp](https://github.com/ServeurpersoCom/qwentts.cpp) or [audio.cpp](https://github.com/0xShug0/audio.cpp) for speech synthesis, and audio.cpp for speech recognition and music generation. Several models can run at once, each on its own port and its own cards; with **Multi-model** off it works the old way, one model at a time.
+Llama Switch puts one dashboard and one OpenAI-compatible endpoint in front of several engines: [llama.cpp](https://github.com/ggerganov/llama.cpp) for text, speech recognition, audio/vision input and decision models, [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) for images, [qwentts.cpp](https://github.com/ServeurpersoCom/qwentts.cpp) or [audio.cpp](https://github.com/0xShug0/audio.cpp) for speech synthesis, and audio.cpp for speech recognition and music generation. Several models run at once, each on its own port and its own cards; with **Multi-model** turned off it works the old way, one model at a time.
 
 ## Features
 
 - **Six kinds of model in one config**: `llm`, `sd`, `tts`, `stt`, `music` and `decision` sections, shown in the UI as **Language**, **Image**, **Speech**, **Transcription**, **Music** and **Decision**.
-- **Several models at once**: with **Multi-model** on, loading a model leaves the others running, so a language model, an image model and a voice can be up together. Off, every start stops everything else.
+- **Several models at once**: **Multi-model** is on from the start, so loading a model leaves the others running, and a language model, an image model and a voice can be up together. Turned off, every start stops everything else.
 - **Running tab**: every model that is up, whatever its kind. The tab is green while at least one model is loaded and red when nothing is.
 - **A dashboard per model**: click any row, running or not, and the dashboard describes that model. Every field change restarts it with the new value; whatever is set on a model that is not loaded yet is what **Load** starts it with.
 - **Per-model settings**:
@@ -169,7 +169,7 @@ Management:
 
 3. **Control Models:**
    - Pick a section tab, click a model, set its GPU, context and the rest, then click **Load**.
-   - Turn on **Multi-model** to keep several models up; click any running row, here or on the **Running** tab, to switch the dashboard to it.
+   - **Multi-model** keeps several models up; turn it off for one at a time. Click any running row, here or on the **Running** tab, to switch the dashboard to it.
    - Change any field to restart that model with it; **Reset** puts the model back on defaults, **Reset All** does it for everything.
    - Click **Open WebUI** to access the running engine's native interface.
    - Click **Unload** on a model, or **Stop All**.

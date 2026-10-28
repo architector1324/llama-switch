@@ -407,6 +407,7 @@ func slotsPoller(inst *Instance) {
 		if err != nil {
 			// --no-slots, a backend that has no such endpoint, or a restart.
 			havePrev, prevBusy = false, false
+			inst.update(func(s *Stats) { s.SlotsBusy, s.SlotsPrefill = 0, 0 })
 			continue
 		}
 
@@ -415,23 +416,30 @@ func slotsPoller(inst *Instance) {
 		// The fullest slot, not the sum: every slot has its own window of this size,
 		// so the gauge reads against one of them. Identical while there is one slot.
 		ctxUsed, ctxLimit := 0.0, 0.0
-		busy := false
+		busySlots, prefill := 0, 0
 		dec, pp := 0.0, 0.0
 		for _, sl := range slots {
 			ctxUsed = math.Max(ctxUsed, num(sl, "n_prompt_tokens"))
 			ctxLimit = math.Max(ctxLimit, num(sl, "n_ctx"))
-			if b, _ := sl["is_processing"].(bool); b {
-				busy = true
-			}
+			decoded := num(sl, "n_decoded")
 			if nt, ok := sl["next_token"].([]any); ok && len(nt) > 0 {
 				if first, ok := nt[0].(map[string]any); ok {
-					dec += num(first, "n_decoded")
+					decoded += num(first, "n_decoded")
 				}
 			}
-			dec += num(sl, "n_decoded")
+			if b, _ := sl["is_processing"].(bool); b {
+				busySlots++
+				// Nothing written yet: the prompt is still going in.
+				if decoded == 0 {
+					prefill++
+				}
+			}
+			dec += decoded
 			pp += num(sl, "n_prompt_tokens_processed")
 		}
+		busy := busySlots > 0
 		inst.update(func(s *Stats) {
+			s.SlotsBusy, s.SlotsPrefill = busySlots, prefill
 			if ctxUsed > 0 {
 				s.CtxUsed = int(ctxUsed)
 			}

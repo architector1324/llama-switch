@@ -202,6 +202,10 @@ func TestSlotsPollerRates(t *testing.T) {
 			if s.CtxUsed != 300 || s.CtxLimit != 4096 {
 				t.Errorf("ctx %d / %d", s.CtxUsed, s.CtxLimit)
 			}
+			// One slot at work, and past its prompt: it has written tokens.
+			if s.SlotsBusy != 1 || s.SlotsPrefill != 0 {
+				t.Errorf("%d slots busy, %d on the prompt", s.SlotsBusy, s.SlotsPrefill)
+			}
 			break
 		}
 		if time.Now().After(deadline) {

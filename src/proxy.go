@@ -258,6 +258,7 @@ func proxyToLlama(w http.ResponseWriter, r *http.Request) {
 	}
 	// Its own port, so another model being up changes nothing for this request.
 	target := fmt.Sprintf("http://%s:%d%s", state.host, inst.Port, r.URL.EscapedPath())
+	defer inst.begin()()
 	forward(w, r, target, body, cleanChat)
 }
 
@@ -400,6 +401,10 @@ func proxyToCurrent(w http.ResponseWriter, r *http.Request, kind string, rewrite
 	target := fmt.Sprintf("http://%s:%d%s", state.host, inst.Port, r.URL.EscapedPath())
 	if r.URL.RawQuery != "" {
 		target += "?" + r.URL.RawQuery
+	}
+	// A GET asks for a list of voices or the like; only a POST sets the engine to work.
+	if r.Method == http.MethodPost {
+		defer inst.begin()()
 	}
 	forward(w, r, target, raw, rewrite)
 }

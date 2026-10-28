@@ -49,6 +49,10 @@ type Stats struct {
 	DecisionMs     float64 `json:"decision_ms,omitempty"`
 	DecisionTokens int     `json:"decision_tokens,omitempty"`
 	DecisionCount  int     `json:"decision_count,omitempty"`
+	// llm: the slots at work at the last poll, and how many of them are still
+	// reading the prompt.
+	SlotsBusy    int `json:"slots_busy"`
+	SlotsPrefill int `json:"slots_prefill"`
 }
 
 func newStats() Stats {
@@ -78,10 +82,11 @@ type Instance struct {
 	cmd  *exec.Cmd
 	done chan struct{} // closed once the process has exited
 
-	mu    sync.Mutex
-	ready bool
-	stats Stats
-	logs  []string
+	mu     sync.Mutex
+	ready  bool
+	active int // requests through the proxy still at work on it
+	stats  Stats
+	logs   []string
 }
 
 func (i *Instance) label() string {
@@ -107,6 +112,22 @@ func (i *Instance) isReady() bool {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	return i.ready
+}
+
+// Marks a request at work on the engine until end is called. Once none is,
+// the busy slots of the last poll are stale: the request that had them is
+// done, and the next poll finds any other.
+func (i *Instance) begin() (end func()) {
+	i.mu.Lock()
+	i.active++
+	i.mu.Unlock()
+	return func() {
+		i.mu.Lock()
+		if i.active--; i.active == 0 {
+			i.stats.SlotsBusy, i.stats.SlotsPrefill = 0, 0
+		}
+		i.mu.Unlock()
+	}
 }
 
 func (i *Instance) update(fn func(s *Stats)) {
@@ -150,7 +171,7 @@ func (i *Instance) toDict() map[string]any {
 		port, pid = i.Port, i.cmd.Process.Pid
 	}
 	i.mu.Lock()
-	ready, stats := i.ready, i.stats
+	ready, active, stats := i.ready, i.active, i.stats
 	i.mu.Unlock()
 	return map[string]any{
 		"model":          i.ModelKey,
@@ -161,6 +182,7 @@ func (i *Instance) toDict() map[string]any {
 		"pid":            pid,
 		"running":        alive,
 		"ready":          ready,
+		"active":         active,
 		"ctx":            i.Ctx,
 		"parallel":       i.Parallel,
 		"devices":        i.Devices,

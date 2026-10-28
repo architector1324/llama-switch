@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -117,9 +118,22 @@ func fakeEcho(kind string, args []string, r *http.Request, body []byte) map[stri
 }
 
 func fakeHandler(kind string, args []string) http.Handler {
+	// Requests being answered: /slots shows each as a slot at work on its prompt.
+	var working atomic.Int32
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		echo := fakeEcho(kind, args, r, body)
+		if r.URL.Path != "/slots" {
+			working.Add(1)
+			defer working.Add(-1)
+		}
+		// A request that takes its time, so a test can see the engine at work.
+		var slow struct {
+			FakeDelayMs int `json:"fake_delay_ms"`
+		}
+		if json.Unmarshal(body, &slow) == nil && slow.FakeDelayMs > 0 {
+			time.Sleep(time.Duration(slow.FakeDelayMs) * time.Millisecond)
+		}
 		send := func(v any) {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(v)
@@ -128,7 +142,7 @@ func fakeHandler(kind string, args []string) http.Handler {
 		switch r.URL.Path {
 		case "/slots":
 			send([]map[string]any{{
-				"id": 0, "n_ctx": 8192, "n_prompt_tokens": 42, "is_processing": false,
+				"id": 0, "n_ctx": 8192, "n_prompt_tokens": 42, "is_processing": working.Load() > 0,
 				"next_token": []map[string]any{{"n_decoded": 0}},
 			}})
 

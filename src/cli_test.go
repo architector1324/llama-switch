@@ -394,8 +394,8 @@ func TestListAndPs(t *testing.T) {
 	}
 	list := rows(buf.String())
 	for name, want := range map[string]string{
-		"zeta": "llm q4", "zeta-q8": "llm q8 running", "legacy": "llm -",
-		"img": "sd q8_0 running", "song-sfx": "music sfx", "ears": "stt f16",
+		"zeta": "llm q4", "zeta-q8": "llm q8 idle", "legacy": "llm -",
+		"img": "sd q8_0 idle", "song-sfx": "music sfx", "ears": "stt f16",
 	} {
 		if got := strings.Join(list[name], " "); got != want {
 			t.Errorf("list %s: %q, want %q", name, got, want)
@@ -414,10 +414,10 @@ func TestListAndPs(t *testing.T) {
 	}
 	ps := rows(buf.String())
 	// Named the way run takes them; memory as the dashboard rounds it.
-	if got := strings.Join(ps["zeta-q8"], " "); !strings.HasPrefix(got, "llm running 2.5 GiB default 2 x 4096 ") {
+	if got := strings.Join(ps["zeta-q8"], " "); !strings.HasPrefix(got, "llm idle 2.5 GiB default 2 x 4096 ") {
 		t.Errorf("ps zeta-q8: %q", got)
 	}
-	if got := strings.Join(ps["img"], " "); !strings.HasPrefix(got, "sd running - default - ") {
+	if got := strings.Join(ps["img"], " "); !strings.HasPrefix(got, "sd idle - default - ") {
 		t.Errorf("ps img: %q", got)
 	}
 	if len(ps) != 2 {
@@ -489,7 +489,7 @@ func TestPsShowsDetails(t *testing.T) {
 	got := regexp.MustCompile(`port \d+, pid \d+`).ReplaceAllString(out.String(), "port N, pid N")
 	// The dashboard's panel for each kind: memory rolled up per card, the host's as RAM.
 	want := `zeta-q8
-  state:             running, port N, pid N
+  state:             idle, port N, pid N
   type:              llm, q8
   gpu:               default
   context:           2 x 4096
@@ -505,7 +505,7 @@ func TestPsShowsDetails(t *testing.T) {
   RAM:               100 MiB
 
 img
-  state:             running, port N, pid N
+  state:             idle, port N, pid N
   type:              sd, q8_0
   gpu:               default
   size:              1024x1024
@@ -518,7 +518,7 @@ img
   compute buffer:    -
 
 voice
-  state:             running, port N, pid N
+  state:             idle, port N, pid N
   type:              tts, q8
   gpu:               default
   max frames:        2048
@@ -540,5 +540,68 @@ voice
 		if err := printDetails(h.url, strings.Fields(names), &out); err == nil || err.Error() != want || out.Len() != 0 {
 			t.Errorf("ps %s: %v, printed %q", names, err, out.String())
 		}
+	}
+}
+
+func TestInstanceState(t *testing.T) {
+	up := runningInstance{Kind: "llm", Running: true, Ready: true, Parallel: 1}
+	with := func(kind string, f func(i *runningInstance)) runningInstance {
+		i := up
+		i.Kind = kind
+		f(&i)
+		return i
+	}
+	for _, tc := range []struct {
+		i            runningInstance
+		state, shown string
+	}{
+		{runningInstance{Kind: "llm"}, "exited", "exited"},
+		{runningInstance{Kind: "llm", Running: true}, "loading", "loading"},
+		{up, "idle", "idle"},
+		{with("llm", func(i *runningInstance) { i.Active = 1 }), "generating", "generating"},
+		// Sent to the engine's port directly: only its slots know.
+		{with("llm", func(i *runningInstance) { i.Stats.SlotsBusy = 1 }), "generating", "generating"},
+		{with("llm", func(i *runningInstance) { i.Active, i.Stats.SlotsBusy, i.Stats.SlotsPrefill = 1, 1, 1 }),
+			"processing prompt", "processing prompt"},
+		{with("llm", func(i *runningInstance) { i.Parallel, i.Active, i.Stats.SlotsBusy, i.Stats.SlotsPrefill = 4, 2, 2, 1 }),
+			"generating", "generating, 2 of 4 slots"},
+		{with("sd", func(i *runningInstance) { i.Active = 2 }), "generating", "generating, 2 requests"},
+		{with("stt", func(i *runningInstance) { i.Active = 1 }), "transcribing", "transcribing"},
+		{with("decision", func(i *runningInstance) { i.Active = 1 }), "deciding", "deciding"},
+	} {
+		if got, shown := tc.i.state(), tc.i.stateDetail(); got != tc.state || shown != tc.shown {
+			t.Errorf("%+v: %q, %q; want %q, %q", tc.i, got, shown, tc.state, tc.shown)
+		}
+	}
+}
+
+func TestPsTellsWorkFromRest(t *testing.T) {
+	h := newHarness(t)
+	h.start(map[string]any{"model_key": "zeta", "quantization": "q4"})
+	zeta := func() runningInstance {
+		instances, err := namedInstances(h.url, []string{"zeta"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return instances[0]
+	}
+	if got := zeta().state(); got != "idle" {
+		t.Fatalf("before: %q", got)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		body := strings.NewReader(`{"model": "zeta", "messages": [], "fake_delay_ms": 1500}`)
+		if resp, err := testClient.Post(h.url+"/v1/chat/completions", "application/json", body); err == nil {
+			resp.Body.Close()
+		}
+	}()
+	// At once from the proxy; then, from the engine's slots, that the prompt is going in.
+	h.waitFor("the request at work", func() bool { return zeta().Active == 1 })
+	h.waitFor("the slot on the prompt", func() bool { return zeta().state() == "processing prompt" })
+	<-done
+	if i := zeta(); i.state() != "idle" || i.Active != 0 || i.Stats.SlotsBusy != 0 {
+		t.Errorf("after: %q, %d active, %d slots busy", i.state(), i.Active, i.Stats.SlotsBusy)
 	}
 }

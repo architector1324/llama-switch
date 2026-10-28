@@ -131,6 +131,7 @@ type runningInstance struct {
 	PID           int    `json:"pid"`
 	Running       bool   `json:"running"`
 	Ready         bool   `json:"ready"`
+	Active        int    `json:"active"`
 	Ctx           int    `json:"ctx"`
 	Parallel      int    `json:"parallel"`
 	PreserveThink bool   `json:"preserve_think"`
@@ -142,14 +143,40 @@ type runningInstance struct {
 
 func instanceKey(model, quant string) string { return model + "\x00" + quant }
 
+// What a model at work is doing, by kind; the rest generate.
+var workingStates = map[string]string{"stt": "transcribing", "decision": "deciding"}
+
+// Requests through the switch tell work from rest at once; the engine's own
+// slots also see what came to its port directly, and when it is still
+// reading the prompt.
 func (i runningInstance) state() string {
 	switch {
 	case !i.Running:
 		return "exited"
 	case !i.Ready:
 		return "loading"
+	case i.Stats.SlotsPrefill > 0 && i.Stats.SlotsPrefill == i.Stats.SlotsBusy:
+		return "processing prompt"
+	case i.Active > 0 || i.Stats.SlotsBusy > 0:
+		if s, ok := workingStates[i.Kind]; ok {
+			return s
+		}
+		return "generating"
 	}
-	return "running"
+	return "idle"
+}
+
+// The state, and for a model at work how much of it there is.
+func (i runningInstance) stateDetail() string {
+	s := i.state()
+	switch {
+	case s == "idle" || !i.Running || !i.Ready:
+	case i.Parallel > 1 && i.Stats.SlotsBusy > 0:
+		s += fmt.Sprintf(", %d of %d slots", i.Stats.SlotsBusy, i.Parallel)
+	case i.Active > 1:
+		s += fmt.Sprintf(", %d requests", i.Active)
+	}
+	return s
 }
 
 func (i runningInstance) gpu() string {
@@ -328,7 +355,7 @@ func printInstance(w io.Writer, name string, i runningInstance) {
 	s := i.Stats
 
 	fmt.Fprintln(w, name)
-	state := i.state()
+	state := i.stateDetail()
 	if i.Running && i.Port > 0 {
 		state += fmt.Sprintf(", port %d, pid %d", i.Port, i.PID)
 	}

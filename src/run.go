@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -13,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -39,6 +41,10 @@ type runOptions struct {
 	Styled       bool // stdout is a terminal
 	Spinner      bool // stderr is a terminal
 
+	// llm, sd: text piped in, ahead of the prompt as it is. It is read, not
+	// searched for files to attach: only the prompt names those.
+	Piped string
+
 	Output    string   // where an image or a clip goes
 	Images    []string // sd: images to edit rather than draw anew
 	Mask      string   // sd: which part of them to edit
@@ -55,7 +61,8 @@ Run a model; the server loads it first if it is not up. With a prompt, or
 input piped in, one result; with neither and a terminal, a session.
 
 What a model does with its input depends on its type:
-  llm       answers it; a session keeps the conversation
+  llm       answers it; a session keeps the conversation. Image, audio and
+            video files named in it go along, for a model that takes them
   sd        draws it into a PNG; image files named in it, or with --image,
             it edits instead
   tts       says it, into a WAV it then plays
@@ -64,8 +71,9 @@ What a model does with its input depends on its type:
   decision  takes the prompt as a yes/no question about the piped state,
             or the state for the questions in --questions
 
-Images and audio go to -o, to stdout when that is not a terminal, or else
-to a new file in the current directory.
+A file is named by its path: as it is, quoted, with its spaces escaped, or
+dragged in. Images and audio made go to -o, to stdout when that is not a
+terminal, or else to a new file in the current directory.
 
 The dashboard's settings are flags too: --gpu, --ctx, --parallel,
 --preserve-thinking, --size, --hires, --frames, --multi. Given one, the model
@@ -95,21 +103,29 @@ var runFlagKinds = map[string][]string{
 	"questions":         {"decision"},
 }
 
-func runCommand(args []string) {
+// Where run's flags land.
+type runArgs struct {
+	hide, verbose, noPlay                          bool
+	system, output, voice, lyrics, questions, mask string
+	duration                                       float64
+	images                                         fileList
+	settings                                       runSettings
+}
+
+func runFlags(a *runArgs) *flag.FlagSet {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	hide := fs.Bool("hide-thinking", false, "llm: leave the reasoning out of the answer")
-	system := fs.String("system", "", "llm: the system prompt")
-	verbose := fs.Bool("verbose", false, "print timings and counts after each result")
-	output := fs.String("o", "", "sd, tts, music: write the result to this `file`")
-	noPlay := fs.Bool("no-play", false, "tts, music: save the audio without playing it")
-	voice := fs.String("voice", "", "tts: the voice to speak with")
-	duration := fs.Float64("duration", 0, "music: length in seconds (default: the model's)")
-	lyrics := fs.String("lyrics", "", "music: lyrics to sing")
-	questions := fs.String("questions", "", "decision: a JSON `file` of the questions to ask")
-	var images fileList
-	fs.Var(&images, "image", "sd: an image `file` to edit; give it again for several")
-	mask := fs.String("mask", "", "sd: a mask `file` for the part of the image to edit")
-	var s runSettings
+	fs.BoolVar(&a.hide, "hide-thinking", false, "llm: leave the reasoning out of the answer")
+	fs.StringVar(&a.system, "system", "", "llm: the system prompt")
+	fs.BoolVar(&a.verbose, "verbose", false, "print timings and counts after each result")
+	fs.StringVar(&a.output, "o", "", "sd, tts, music: write the result to this `file`")
+	fs.BoolVar(&a.noPlay, "no-play", false, "tts, music: save the audio without playing it")
+	fs.StringVar(&a.voice, "voice", "", "tts: the voice to speak with")
+	fs.Float64Var(&a.duration, "duration", 0, "music: length in seconds (default: the model's)")
+	fs.StringVar(&a.lyrics, "lyrics", "", "music: lyrics to sing")
+	fs.StringVar(&a.questions, "questions", "", "decision: a JSON `file` of the questions to ask")
+	fs.Var(&a.images, "image", "sd: an image `file` to edit; give it again for several")
+	fs.StringVar(&a.mask, "mask", "", "sd: a mask `file` for the part of the image to edit")
+	s := &a.settings
 	fs.StringVar(&s.gpu, "gpu", "", `card(s) to run on, as the dashboard names them, or "all"; sd also takes role=card pairs: diffusion, te, vae`)
 	fs.IntVar(&s.ctx, "ctx", 0, "llm, decision: context window per slot")
 	fs.IntVar(&s.parallel, "parallel", 0, "llm, decision: parallel slots")
@@ -122,6 +138,12 @@ func runCommand(args []string) {
 		fmt.Fprint(fs.Output(), runUsage)
 		printFlags(fs, nil)
 	}
+	return fs
+}
+
+func runCommand(args []string) {
+	var a runArgs
+	fs := runFlags(&a)
 	fs.Parse(args)
 	if fs.NArg() == 0 {
 		fs.Usage()
@@ -132,6 +154,7 @@ func runCommand(args []string) {
 	fs.Parse(fs.Args()[1:])
 	rest := fs.Args()
 	prompt := strings.Join(rest, " ")
+	s := a.settings
 	s.set = map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { s.set[f.Name] = true })
 
@@ -149,22 +172,22 @@ func runCommand(args []string) {
 		Model:    model,
 		ModelKey: entry.Details.ParentModel,
 		Kind:     entry.Kind,
-		System:   *system,
-		Verbose:  *verbose,
+		System:   a.system,
+		Verbose:  a.verbose,
 		Styled:   isTerminal(os.Stdout),
 		Spinner:  isTerminal(os.Stderr),
-		Output:   *output,
-		Images:   images,
-		Mask:     *mask,
-		Play:     !*noPlay,
-		Voice:    *voice,
-		Duration: *duration,
-		Lyrics:   *lyrics,
+		Output:   a.output,
+		Images:   a.images,
+		Mask:     a.mask,
+		Play:     !a.noPlay,
+		Voice:    a.voice,
+		Duration: a.duration,
+		Lyrics:   a.lyrics,
 	}
 	// Piped somewhere else, only the answer is wanted.
-	opts.ShowThinking = opts.Styled && !*hide
-	if *questions != "" {
-		if opts.Questions, err = readQuestions(*questions); err != nil {
+	opts.ShowThinking = opts.Styled && !a.hide
+	if a.questions != "" {
+		if opts.Questions, err = readQuestions(a.questions); err != nil {
 			fail(err)
 		}
 	}
@@ -176,8 +199,10 @@ func runCommand(args []string) {
 			fail(err)
 		}
 	}
-	// The text first, what to do with it after, as with ollama.
-	text := strings.TrimSpace(strings.TrimSpace(string(piped)) + "\n\n" + prompt)
+	text := joinInput(string(piped), prompt)
+	if opts.Kind == "llm" || opts.Kind == "sd" {
+		opts.Piped, text = strings.TrimSpace(string(piped)), prompt
+	}
 
 	ctx := context.Background()
 	if err := applySettings(ctx, opts, entry.Details.QuantizationLevel, s); err != nil {
@@ -198,7 +223,7 @@ func runCommand(args []string) {
 		}
 	case opts.Kind == "decision" && opts.Questions == nil && prompt != "":
 		err = decide(ctx, opts, yesNoQuestion(prompt), strings.TrimSpace(string(piped)), os.Stdout, os.Stderr)
-	case text != "":
+	case text != "" || opts.Piped != "":
 		err = task.turn(ctx, text)
 	case !interactive:
 		err = errors.New("nothing to send: give a prompt or pipe one in")
@@ -372,7 +397,6 @@ type runTask struct {
 	turn  func(ctx context.Context, text string) error
 	clear func() // forgets the conversation; nil where there is none
 	hint  string // what a message is, for /?
-	paths bool   // messages are file paths, so a leading / is not a command
 }
 
 func newRunTask(opts runOptions, out, errOut io.Writer) runTask {
@@ -395,9 +419,8 @@ func newRunTask(opts runOptions, out, errOut io.Writer) runTask {
 		}
 	case "stt":
 		return runTask{
-			turn:  func(ctx context.Context, text string) error { return transcribeFile(ctx, opts, text, out, errOut) },
-			hint:  "Each message is the path of a recording to transcribe.",
-			paths: true,
+			turn: func(ctx context.Context, text string) error { return transcribeFile(ctx, opts, text, out, errOut) },
+			hint: "Each message is the path of a recording to transcribe.",
 		}
 	case "decision":
 		return runTask{
@@ -412,7 +435,7 @@ func newRunTask(opts runOptions, out, errOut io.Writer) runTask {
 
 type chatMessage struct {
 	Role    string `json:"role"`
-	Content string `json:"content"`
+	Content any    `json:"content"` // the text, or parts: files and the text
 }
 
 // The conversation so far goes with every message, after the system prompt,
@@ -421,7 +444,11 @@ func chatTask(opts runOptions, out, errOut io.Writer) runTask {
 	var history []chatMessage
 	return runTask{
 		turn: func(ctx context.Context, text string) error {
-			history = append(history, chatMessage{"user", text})
+			content, err := userContent(ctx, opts, text, out, errOut)
+			if err != nil {
+				return err
+			}
+			history = append(history, chatMessage{"user", content})
 			messages := history
 			if opts.System != "" {
 				messages = append([]chatMessage{{"system", opts.System}}, history...)
@@ -436,8 +463,61 @@ func chatTask(opts runOptions, out, errOut io.Writer) runTask {
 			return nil
 		},
 		clear: func() { history = nil },
-		hint:  "Each message goes with the conversation so far.",
+		hint: "Each message goes with the conversation so far. Name an image, audio or\n" +
+			"video file in it, or drag one in, and the file goes along.",
 	}
+}
+
+// A message as the chat API takes it. The files it names go as parts of their
+// own, ahead of the text, where Gemma and Qwen want them; whether the model
+// takes them is for the engine to say.
+func userContent(ctx context.Context, opts runOptions, typed string, out, errOut io.Writer) (any, error) {
+	prompt, paths, _ := extractFiles(typed, false, "image", "audio", "video")
+	text := joinInput(opts.Piped, prompt)
+	if len(paths) == 0 {
+		return text, nil
+	}
+	var parts []map[string]any
+	for _, p := range paths {
+		part, err := mediaPart(ctx, p)
+		if err != nil {
+			return nil, err
+		}
+		fmt.Fprintf(noteWriter(opts, out, errOut), "Added %s %s\n", mediaKind(p), p)
+		parts = append(parts, part)
+	}
+	if text != "" {
+		parts = append(parts, map[string]any{"type": "text", "text": text})
+	}
+	return parts, nil
+}
+
+// A file as llama-server takes it: an image or a video as a data URL, audio
+// as base64 with its format. WAV, MP3 and FLAC it decodes itself; anything
+// else goes through ffmpeg into WAV first.
+func mediaPart(ctx context.Context, path string) (map[string]any, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	ext := strings.ToLower(filepath.Ext(path))
+	dataURL := map[string]string{"url": "data:" + mediaTypes[ext] + ";base64," + base64.StdEncoding.EncodeToString(data)}
+	switch mediaKind(path) {
+	case "image":
+		return map[string]any{"type": "image_url", "image_url": dataURL}, nil
+	case "video":
+		return map[string]any{"type": "video_url", "video_url": dataURL}, nil
+	}
+	format := strings.TrimPrefix(ext, ".")
+	if format != "wav" && format != "mp3" && format != "flac" {
+		if data, err = convertToWav(ctx, data); err != nil {
+			return nil, fmt.Errorf("%s: %v", path, err)
+		}
+		format = "wav"
+	}
+	return map[string]any{"type": "input_audio", "input_audio": map[string]string{
+		"data": base64.StdEncoding.EncodeToString(data), "format": format,
+	}}, nil
 }
 
 const replPrompt = "> "
@@ -498,7 +578,8 @@ func repl(in io.Reader, out, errOut io.Writer, interrupts <-chan os.Signal, task
 		case cmd == "/?" || cmd == "/help":
 			fmt.Fprint(out, replHelp(task))
 			continue
-		case strings.HasPrefix(cmd, "/") && !strings.Contains(cmd, "\n") && !task.paths:
+		// A command is one word; a path typed or dragged in has more slashes, and is a message.
+		case strings.HasPrefix(cmd, "/") && !strings.Contains(cmd, "\n") && !strings.Contains(strings.Fields(cmd)[0][1:], "/"):
 			fmt.Fprintf(out, "Unknown command '%s'. Type /? for help\n", strings.Fields(cmd)[0])
 			continue
 		}

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -567,7 +568,7 @@ func TestSystemPromptLeadsEveryRequest(t *testing.T) {
 
 // --- Editing images ---
 
-func TestExtractImages(t *testing.T) {
+func TestExtractFiles(t *testing.T) {
 	dir := t.TempDir()
 	cat := filepath.Join(dir, "cat.png")
 	spaced := filepath.Join(dir, "my dog.JPG")
@@ -584,7 +585,7 @@ func TestExtractImages(t *testing.T) {
 	}{
 		{"a red cat", "a red cat", nil},
 		{"make it black " + cat, "make it black", []string{cat}},
-		{cat + "  make it   black", "make it black", []string{cat}},
+		{cat + "  make it black", "make it black", []string{cat}},
 		{"'" + spaced + "' add a hat", "add a hat", []string{spaced}},
 		{`"` + spaced + `" add a hat`, "add a hat", []string{spaced}},
 		{escaped + " add a hat", "add a hat", []string{spaced}},
@@ -594,15 +595,38 @@ func TestExtractImages(t *testing.T) {
 		{"rewrite " + notes, "rewrite " + notes, nil},
 		{"a logo.png style poster", "a logo.png style poster", nil},
 	} {
-		prompt, paths, err := extractImages(tc.in)
+		prompt, paths, err := extractFiles(tc.in, true, "image")
 		if err != nil || prompt != tc.prompt || fmt.Sprint(paths) != fmt.Sprint(tc.paths) {
-			t.Errorf("extractImages(%q) = %q %v %v, want %q %v", tc.in, prompt, paths, err, tc.prompt, tc.paths)
+			t.Errorf("extractFiles(%q) = %q %v %v, want %q %v", tc.in, prompt, paths, err, tc.prompt, tc.paths)
 		}
 	}
 
-	if _, _, err := extractImages("fix " + filepath.Join(dir, "gone.png")); err == nil ||
+	if _, _, err := extractFiles("fix "+filepath.Join(dir, "gone.png"), true, "image"); err == nil ||
 		!strings.HasSuffix(err.Error(), "gone.png: no such image") {
 		t.Errorf("missing image: %v", err)
+	}
+
+	// A chat's message: other kinds too, its lines kept, a path to nothing left
+	// in the question about it.
+	clip := filepath.Join(dir, "clip.mp4")
+	os.WriteFile(clip, []byte("x"), 0o600)
+	media := []string{"image", "audio", "video"}
+	for _, tc := range []struct {
+		in, prompt string
+		paths      []string
+	}{
+		{clip + " what happens?\n```\nkeep  this\n```", "what happens?\n```\nkeep  this\n```", []string{clip}},
+		{"why is /srv/www/logo.png gone", "why is /srv/www/logo.png gone", nil},
+		{"compare " + cat + "\nwith " + clip, "compare \nwith", []string{cat, clip}},
+	} {
+		prompt, paths, err := extractFiles(tc.in, false, media...)
+		if err != nil || prompt != tc.prompt || fmt.Sprint(paths) != fmt.Sprint(tc.paths) {
+			t.Errorf("extractFiles(%q) = %q %v %v, want %q %v", tc.in, prompt, paths, err, tc.prompt, tc.paths)
+		}
+	}
+	// An image model takes images only.
+	if prompt, paths, _ := extractFiles(clip+" "+cat, true, "image"); prompt != clip || len(paths) != 1 {
+		t.Errorf("got %q %v", prompt, paths)
 	}
 }
 
@@ -736,5 +760,94 @@ func TestReplAttachesImages(t *testing.T) {
 	}
 	if strings.Count(out.String(), "Saved ") != 2 || !strings.Contains(out.String(), "Added image "+cat) || errOut.Len() != 0 {
 		t.Errorf("out %q, err %q", out.String(), errOut.String())
+	}
+}
+
+// --- Files in a chat ---
+
+func asJSON(v any) string {
+	b, _ := json.Marshal(v)
+	return string(b)
+}
+
+func TestChatAttachesFiles(t *testing.T) {
+	s, url := scripted(t, sse(delta("content", "a cat")))
+	dir := t.TempDir()
+	pic, voice, clip := filepath.Join(dir, "cat.png"), filepath.Join(dir, "hi.wav"), filepath.Join(dir, "my clip.mp4")
+	os.WriteFile(pic, tinyPNG(t), 0o600)
+	os.WriteFile(voice, tinyWAV(), 0o600)
+	os.WriteFile(clip, []byte("not really a video"), 0o600)
+	b64 := func(p string) string { return base64.StdEncoding.EncodeToString(mustRead(t, p)) }
+
+	var out, errOut bytes.Buffer
+	opts := runOptions{Server: url, Model: "m", Styled: true}
+	// A path dragged in first is a message, not a command.
+	in := pic + " what is it?\n'" + clip + "' and " + voice + "\nwhy is /srv/logo.png gone\n/bye\n"
+	if err := repl(strings.NewReader(in), &out, &errOut, nil, chatTask(opts, &out, &errOut)); err != nil {
+		t.Fatal(err)
+	}
+	sent := s.sent()
+	if len(sent) != 3 || errOut.Len() != 0 {
+		t.Fatalf("sent %d requests, errors %q", len(sent), errOut.String())
+	}
+	want := []any{
+		map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64," + b64(pic)}},
+		map[string]any{"type": "text", "text": "what is it?"},
+	}
+	if got := sent[0][0].Content; asJSON(got) != asJSON(want) {
+		t.Errorf("first message %s, want %s", asJSON(got), asJSON(want))
+	}
+	want = []any{
+		map[string]any{"type": "video_url", "video_url": map[string]any{"url": "data:video/mp4;base64," + b64(clip)}},
+		map[string]any{"type": "input_audio", "input_audio": map[string]any{"data": b64(voice), "format": "wav"}},
+		map[string]any{"type": "text", "text": "and"},
+	}
+	// The files stay in the conversation.
+	if got := sent[1]; len(got) != 3 || asJSON(got[0]) != asJSON(sent[0][0]) || asJSON(got[2].Content) != asJSON(want) {
+		t.Errorf("second request %s", asJSON(got))
+	}
+	if got := sent[2][4].Content; got != "why is /srv/logo.png gone" {
+		t.Errorf("third message %v", got)
+	}
+	for _, note := range []string{"Added image " + pic, "Added video " + clip, "Added audio " + voice} {
+		if !strings.Contains(out.String(), note+"\n") {
+			t.Errorf("no %q in %q", note, out.String())
+		}
+	}
+}
+
+func TestChatTakesPipedTextAsItIs(t *testing.T) {
+	s, url := scripted(t, sse(delta("content", "none")))
+	pic := filepath.Join(t.TempDir(), "cat.png")
+	os.WriteFile(pic, tinyPNG(t), 0o600)
+	opts := runOptions{Server: url, Model: "m", Piped: "ls:\n" + pic + "\n"}
+	if err := chatTask(opts, io.Discard, io.Discard).turn(context.Background(), "which are photos?"); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.sent()[0][0].Content; got != "ls:\n"+pic+"\n\nwhich are photos?" {
+		t.Errorf("sent %q", got)
+	}
+}
+
+func TestMediaPartConvertsAudioTheEngineCannotRead(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("no ffmpeg")
+	}
+	dir := t.TempDir()
+	wav, ogg := filepath.Join(dir, "a.wav"), filepath.Join(dir, "a.ogg")
+	os.WriteFile(wav, tinyWAV(), 0o600)
+	if out, err := exec.Command("ffmpeg", "-loglevel", "error", "-i", wav, ogg).CombinedOutput(); err != nil {
+		t.Fatalf("ffmpeg: %v %s", err, out)
+	}
+	for path, wantSame := range map[string]bool{wav: true, ogg: false} {
+		part, err := mediaPart(context.Background(), path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		audio := part["input_audio"].(map[string]string)
+		raw, _ := base64.StdEncoding.DecodeString(audio["data"])
+		if audio["format"] != "wav" || !bytes.HasPrefix(raw, []byte("RIFF")) || bytes.Equal(raw, mustRead(t, path)) != wantSame {
+			t.Errorf("%s: format %q, %d bytes", path, audio["format"], len(raw))
+		}
 	}
 }

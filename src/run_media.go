@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -55,14 +56,34 @@ func noteWriter(opts runOptions, out, errOut io.Writer) io.Writer {
 	return errOut
 }
 
-var imageExts = map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".webp": true, ".bmp": true}
+// The files a message can carry, by extension.
+var mediaTypes = map[string]string{
+	".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
+	".bmp": "image/bmp", ".gif": "image/gif",
+	".wav": "audio/wav", ".mp3": "audio/mpeg", ".flac": "audio/flac", ".ogg": "audio/ogg",
+	".opus": "audio/opus", ".m4a": "audio/mp4", ".aac": "audio/aac",
+	".mp4": "video/mp4", ".m4v": "video/mp4", ".webm": "video/webm", ".mkv": "video/x-matroska",
+	".mov": "video/quicktime", ".avi": "video/x-msvideo", ".mpeg": "video/mpeg", ".mpg": "video/mpeg",
+}
 
-// Image files named in a message come out of its text and go with the
-// request, the way ollama attaches them: a path, quoted, with its spaces
-// escaped, or dragged in as a file:// URL. A word that only looks like a file
-// name ("logo.png style") stays text; a path to nothing is an error rather
-// than a prompt nobody meant.
-func extractImages(text string) (string, []string, error) {
+// "image", "audio" or "video"; "" for any other file.
+func mediaKind(path string) string {
+	kind, _, _ := strings.Cut(mediaTypes[strings.ToLower(filepath.Ext(path))], "/")
+	return kind
+}
+
+// Piped text, then the prompt that says what to do with it, as with ollama.
+func joinInput(piped, prompt string) string {
+	return strings.TrimSpace(strings.TrimSpace(piped) + "\n\n" + prompt)
+}
+
+// Files of the kinds given that a message names come out of its text and go
+// with the request, the way ollama attaches them: a path, quoted, with its
+// spaces escaped, or dragged in as a file:// URL. A word that only looks like
+// a file name ("logo.png style") stays text. strict makes a path to nothing an
+// error rather than a prompt nobody meant; otherwise it stays text, as in a
+// question about that path.
+func extractFiles(text string, strict bool, kinds ...string) (string, []string, error) {
 	type span struct{ start, end int }
 	var cut []span
 	var paths []string
@@ -91,29 +112,28 @@ func extractImages(text string) (string, []string, error) {
 
 		word := text[start:i]
 		path := unquotePath(word)
-		if !imageExts[strings.ToLower(filepath.Ext(path))] {
+		kind := mediaKind(path)
+		if !slices.Contains(kinds, kind) {
 			continue
 		}
 		if st, err := os.Stat(path); err == nil && st.Mode().IsRegular() {
 			cut = append(cut, span{start, i})
 			paths = append(paths, path)
-		} else if strings.ContainsAny(word, `/\`) || strings.HasPrefix(word, "~") {
-			return "", nil, fmt.Errorf("%s: no such image", path)
+		} else if strict && (strings.ContainsAny(word, `/\`) || strings.HasPrefix(word, "~")) {
+			return "", nil, fmt.Errorf("%s: no such %s", path, kind)
 		}
 	}
 
-	if len(cut) == 0 {
-		return strings.TrimSpace(text), nil, nil
-	}
+	// A path goes with the blanks after it; the rest keeps its lines, code and all.
 	var rest strings.Builder
 	last := 0
 	for _, c := range cut {
 		rest.WriteString(text[last:c.start])
-		rest.WriteByte(' ')
-		last = c.end
+		for last = c.end; last < len(text) && (text[last] == ' ' || text[last] == '\t'); last++ {
+		}
 	}
 	rest.WriteString(text[last:])
-	return strings.Join(strings.Fields(rest.String()), " "), paths, nil
+	return strings.TrimSpace(rest.String()), paths, nil
 }
 
 // model-20261028-221530.png, numbered on if that is taken.
@@ -140,10 +160,11 @@ type imageAnswer struct {
 // are edited by it instead.
 func generateImage(ctx context.Context, opts runOptions, prompt string, out, errOut io.Writer) error {
 	started := time.Now()
-	prompt, found, err := extractImages(prompt)
+	prompt, found, err := extractFiles(prompt, true, "image")
 	if err != nil {
 		return err
 	}
+	prompt = joinInput(opts.Piped, prompt)
 	for _, p := range found {
 		fmt.Fprintf(noteWriter(opts, out, errOut), "Added image %s\n", p)
 	}

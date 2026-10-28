@@ -25,7 +25,7 @@ Llama Switch puts one dashboard and one OpenAI-compatible endpoint in front of s
   - **Decision:** time of the last decision, its prompt size, requests served.
   - **Transcription** and **Music:** none yet.
 - **Auto-switching from the API**: a request that names a `model` loads it first, whether the name arrives in a JSON body (chat, images, speech) or in a multipart upload (transcriptions, image edits).
-- **Terminal client**: `llmsw run`, `list` and `ps`, in the manner of ollama: run a model of any type with the dashboard's settings as flags, see what the config offers and what is up.
+- **Terminal client**: `llmsw run`, `list`, `ps` and `stop`, in the manner of ollama: run a model of any type with the dashboard's settings as flags, see what the config offers and what is up.
 - **Upstream Logs**: each model keeps its own log, and the panel names whose log it is showing.
 - **Theme Support**: built-in Dark and Light modes.
 - **WebUI Link**: opens the running engine's own interface on the engine's own address. Engine pages request their paths absolutely, so none of them survive being served under a prefix here.
@@ -196,6 +196,7 @@ Besides `serve`, the binary is a client for a running server, much like ollama's
 | `llmsw run MODEL [PROMPT]` | run a model of any type, loading it first if it is not up |
 | `llmsw list [TYPE]`, `llmsw ls` | every model in the config with its type, quant and state; `TYPE` narrows it to one section |
 | `llmsw ps`, `llmsw status` | the models that are up: state, memory, cards, context window and port |
+| `llmsw stop MODEL...`, `llmsw stop --all` | unload the models named, as `ps` names them, or every one; a name that is not up stops nothing |
 
 They reach the server at `LLMSW_HOST`, `localhost:11435` by default; a bare `host:port` and a full URL both work. Model names are the ids `/v1/models` lists, so whatever `list` shows can go to `run`.
 

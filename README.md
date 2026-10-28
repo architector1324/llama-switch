@@ -42,7 +42,7 @@ Llama Switch puts one dashboard and one OpenAI-compatible endpoint in front of s
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/your-username/llama-switch.git
+   git clone https://github.com/architector1324/llama-switch.git
    cd llama-switch
    ```
 

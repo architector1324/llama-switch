@@ -42,7 +42,7 @@ Llama Switch ставит один дашборд и один OpenAI-совме�
 
 1. **Клонируйте репозиторий:**
    ```bash
-   git clone https://github.com/your-username/llama-switch.git
+   git clone https://github.com/architector1324/llama-switch.git
    cd llama-switch
    ```
 

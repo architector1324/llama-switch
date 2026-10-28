@@ -300,3 +300,29 @@ func TestWavMultipartConverts(t *testing.T) {
 		t.Errorf("garbage: %v", err)
 	}
 }
+
+// audio.cpp tells a WAV by its file name, so a WAV under another name is
+// renamed, its bytes left as they are.
+func TestWavMultipartRenamesAWavUnderAnotherName(t *testing.T) {
+	wav := []byte("RIFF....WAVEdata")
+	body, ctype := multipartBody(t, map[string]string{"model": "ears"}, "recording", wav)
+	got, err := wavMultipart(context.Background(), body, ctype)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, boundary, _ := strings.Cut(ctype, "boundary=")
+	mr := multipart.NewReader(bytes.NewReader(got), boundary)
+	for {
+		part, err := mr.NextPart()
+		if err != nil {
+			break
+		}
+		if part.FileName() == "" {
+			continue
+		}
+		data, _ := io.ReadAll(part)
+		if part.FileName() != "audio.wav" || part.Header.Get("Content-Type") != "audio/wav" || !bytes.Equal(data, wav) {
+			t.Errorf("file part %q %q %q", part.FileName(), part.Header.Get("Content-Type"), data)
+		}
+	}
+}

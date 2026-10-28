@@ -473,14 +473,15 @@ func asrKind(raw []byte, contentType string) string {
 
 var (
 	reFilename    = regexp.MustCompile(`filename="[^"]*"`)
+	reWavFilename = regexp.MustCompile(`(?i)filename="[^"]*\.wav"`)
 	rePartCtyLine = regexp.MustCompile(`(?im)^content-type:.*$`)
 )
 
 // The upload's file part as WAV: audio.cpp transcribes WAV only.
 //
 // Open WebUI sends mp3 and browsers record webm, so anything that is not RIFF
-// goes through ffmpeg. Temp files both ways: mp4/m4a keep their index at the end,
-// and ffmpeg cannot seek a pipe to find it.
+// goes through ffmpeg. audio.cpp tells a WAV by its file name, not its bytes,
+// so a WAV sent under another name ("recording", "x.bin") is renamed.
 func wavMultipart(ctx context.Context, raw []byte, contentType string) ([]byte, error) {
 	delim := multipartDelimiter(contentType)
 	if delim == nil {
@@ -510,11 +511,31 @@ func wavMultipart(ctx context.Context, raw []byte, contentType string) ([]byte, 
 	if dataEnd < 0 {
 		return raw, nil
 	}
-	data := raw[pos:dataEnd]
-	if bytes.HasPrefix(data, []byte("RIFF")) {
+	wav := raw[pos:dataEnd]
+	if !bytes.HasPrefix(wav, []byte("RIFF")) {
+		converted, err := convertToWav(ctx, wav)
+		if err != nil {
+			return nil, err
+		}
+		wav = converted
+	} else if reWavFilename.Match(head) {
 		return raw, nil
 	}
 
+	head = reFilename.ReplaceAll(head, []byte(`filename="audio.wav"`))
+	head = rePartCtyLine.ReplaceAll(head, []byte("Content-Type: audio/wav"))
+	out := make([]byte, 0, headStart+len(head)+4+len(wav)+len(raw)-dataEnd)
+	out = append(out, raw[:headStart]...)
+	out = append(out, head...)
+	out = append(out, "\r\n\r\n"...)
+	out = append(out, wav...)
+	out = append(out, raw[dataEnd:]...)
+	return out, nil
+}
+
+// Temp files both ways: mp4/m4a keep their index at the end, and ffmpeg cannot
+// seek a pipe to find it.
+func convertToWav(ctx context.Context, data []byte) ([]byte, error) {
 	tmp, err := os.MkdirTemp("", "llama-switch-")
 	if err != nil {
 		return nil, err
@@ -541,16 +562,7 @@ func wavMultipart(ctx context.Context, raw []byte, contentType string) ([]byte, 
 		return nil, newErr(http.StatusBadRequest, "Could not convert the upload to WAV: %s",
 			strings.TrimSpace(strings.ToValidUTF8(stderr.String(), "�")))
 	}
-
-	head = reFilename.ReplaceAll(head, []byte(`filename="audio.wav"`))
-	head = rePartCtyLine.ReplaceAll(head, []byte("Content-Type: audio/wav"))
-	out := make([]byte, 0, headStart+len(head)+4+len(wav)+len(raw)-dataEnd)
-	out = append(out, raw[:headStart]...)
-	out = append(out, head...)
-	out = append(out, "\r\n\r\n"...)
-	out = append(out, wav...)
-	out = append(out, raw[dataEnd:]...)
-	return out, nil
+	return wav, nil
 }
 
 // --- Qwen3-ASR answers with a "language <Name><asr_text>" header: llama.cpp#26749 ---

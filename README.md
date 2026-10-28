@@ -25,6 +25,7 @@ Llama Switch puts one dashboard and one OpenAI-compatible endpoint in front of s
   - **Decision:** time of the last decision, its prompt size, requests served.
   - **Transcription** and **Music:** none yet.
 - **Auto-switching from the API**: a request that names a `model` loads it first, whether the name arrives in a JSON body (chat, images, speech) or in a multipart upload (transcriptions, image edits).
+- **Terminal client**: `llmsw run`, `list` and `ps`, in the manner of ollama: chat with a model, see what the config offers and what is up.
 - **Upstream Logs**: each model keeps its own log, and the panel names whose log it is showing.
 - **Theme Support**: built-in Dark and Light modes.
 - **WebUI Link**: opens the running engine's own interface on the engine's own address. Engine pages request their paths absolutely, so none of them survive being served under a prefix here.
@@ -160,7 +161,7 @@ Management:
 
 1. **Start the server:**
    ```bash
-   llmsw --config config.yaml --watch
+   llmsw serve --config config.yaml --watch
    ```
 
 2. **Open the Dashboard:**
@@ -173,7 +174,9 @@ Management:
    - Click **Open WebUI** to access the running engine's native interface.
    - Click **Unload** on a model, or **Stop All**.
 
-### Command line
+### Server flags
+
+`llmsw serve` takes:
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
@@ -184,9 +187,30 @@ Management:
 | `-f`, `--config` | `config.yaml` | config file path |
 | `-w`, `--watch` | off | reload the config when it changes on disk |
 
+### From the terminal
+
+Besides `serve`, the binary is a client for a running server, much like ollama's:
+
+| Command | Does |
+| --- | --- |
+| `llmsw run MODEL [PROMPT]` | chat with a language model, loading it first if it is not up |
+| `llmsw list [TYPE]`, `llmsw ls` | every model in the config with its type, quant and state; `TYPE` narrows it to one section |
+| `llmsw ps`, `llmsw status` | the models that are up: state, memory, cards, context window and port |
+
+They reach the server at `LLMSW_HOST`, `localhost:11435` by default; a bare `host:port` and a full URL both work. Model names are the ids `/v1/models` lists, so whatever `list` shows can go to `run`.
+
+`run` with no prompt opens a session in the terminal: the conversation so far goes with every message, `/clear` forgets it, `"""` starts and ends a message of several lines, Ctrl+C stops the answer being written, and `/bye` or Ctrl+D leaves. Given a prompt, or text on its standard input, it answers once and exits; piped text comes first and the prompt after it:
+
+```bash
+llmsw run gemma4 "Say hi in three words"
+git diff | llmsw run qwen3.6:35b "Write a commit message for this"
+```
+
+A model's reasoning is shown dimmed, between `Thinking...` and `...done thinking.`, while the answer goes to a terminal; `--hide-thinking` leaves it out, and so does sending the output anywhere else. A model that takes longer to load than the server's one-minute wait is simply waited for.
+
 ### As a systemd service
 
-The repository carries a user unit, [llama-switch.service](llama-switch.service), that runs `~/.local/bin/llmsw` on `~/.config/llama-switch/config.yaml` with `--watch`. Add whatever flags you need to its `ExecStart` (`--host 0.0.0.0` to reach the dashboard from other machines), then:
+The repository carries a user unit, [llama-switch.service](llama-switch.service), that runs `llmsw serve` from `~/.local/bin` on `~/.config/llama-switch/config.yaml` with `--watch`. Add whatever flags you need to its `ExecStart` (`--host 0.0.0.0` to reach the dashboard from other machines), then:
 
 ```bash
 cp llama-switch.service ~/.config/systemd/user/

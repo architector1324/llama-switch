@@ -255,7 +255,7 @@ cat ticket.txt | llmsw run clef:9b "Is this urgent?"
 | `--preserve-thinking` | `llm` | **Preserve Thinking**; `--preserve-thinking=false` выключает |
 | `--size ШxВ`, `--hires` | `sd` | **Output Size**, **Hires Fix** |
 | `--frames N` | `tts` | **Max Frames** |
-| `--multi` | любой | **Multi-model**, выставляется до загрузки модели; `--multi=false` выключает |
+| `--single` | любой | выключает **Multi-model** до загрузки модели, и она работает одна; `--single=false` включает обратно |
 
 Флаг для другого типа - ошибка, а не молчаливый пропуск.
 

@@ -255,7 +255,7 @@ The dashboard's settings are flags too, each for the types the dashboard shows i
 | `--preserve-thinking` | `llm` | **Preserve Thinking**; `--preserve-thinking=false` turns it off |
 | `--size WxH`, `--hires` | `sd` | **Output Size**, **Hires Fix** |
 | `--frames N` | `tts` | **Max Frames** |
-| `--multi` | every type | **Multi-model**, set before the model loads; `--multi=false` turns it off |
+| `--single` | every type | **Multi-model** off, set before the model loads, so the model runs alone; `--single=false` turns it back on |
 
 A flag for another type is an error rather than quietly ignored.
 

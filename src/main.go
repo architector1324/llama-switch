@@ -111,6 +111,10 @@ func main() {
 		psCommand(args)
 	case "stop":
 		stopCommand(args)
+	case "completion":
+		completionCommand(args)
+	case "__complete":
+		completeCommand(args)
 	case "help", "-h", "-help", "--help":
 		fmt.Print(usageText)
 	default:
@@ -162,27 +166,35 @@ func printFlags(fs *flag.FlagSet, short map[string]string) {
 	})
 }
 
-func serveCommand(args []string) {
-	var (
-		host, configPath    string
-		port, ctx, parallel int
-		watch               bool
-	)
+// Where serve's flags land.
+type serveArgs struct {
+	host, config        string
+	port, ctx, parallel int
+	watch               bool
+}
+
+func serveFlags(a *serveArgs) *flag.FlagSet {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	fs.Usage = func() {
 		fmt.Fprint(fs.Output(), "Usage: llmsw serve [flags]\n\nStart the server and its dashboard.\n\nFlags:\n")
 		printFlags(fs, serveShortFlags)
 	}
-	fs.StringVar(&host, "host", "localhost", "interface for the UI and for the engines it launches")
-	fs.IntVar(&port, "port", 11435, "UI port (engines get a free port each)")
-	fs.IntVar(&ctx, "ctx", 4096, "default context window, per slot")
-	fs.IntVar(&parallel, "parallel", 1, "default server slots per model")
-	fs.StringVar(&configPath, "config", "config.yaml", "config file path")
-	fs.BoolVar(&watch, "watch", false, "reload the config when it changes on disk")
+	fs.StringVar(&a.host, "host", "localhost", "interface for the UI and for the engines it launches")
+	fs.IntVar(&a.port, "port", 11435, "UI port (engines get a free port each)")
+	fs.IntVar(&a.ctx, "ctx", 4096, "default context window, per slot")
+	fs.IntVar(&a.parallel, "parallel", 1, "default server slots per model")
+	fs.StringVar(&a.config, "config", "config.yaml", "config `file` path")
+	fs.BoolVar(&a.watch, "watch", false, "reload the config when it changes on disk")
 	for long, short := range serveShortFlags {
 		f := fs.Lookup(long)
 		fs.Var(f.Value, short, "same as --"+long)
 	}
+	return fs
+}
+
+func serveCommand(args []string) {
+	var a serveArgs
+	fs := serveFlags(&a)
 	fs.Parse(args)
 	if fs.NArg() > 0 {
 		fmt.Fprintf(os.Stderr, "llmsw serve: unexpected argument %q\n", fs.Arg(0))
@@ -190,20 +202,20 @@ func serveCommand(args []string) {
 		os.Exit(2)
 	}
 
-	state.defaultCtx = ctx
-	state.defaultParallel = parallel
-	state.host = host
-	state.cfg = newConfigManager(configPath, watch, onConfigChange)
+	state.defaultCtx = a.ctx
+	state.defaultParallel = a.parallel
+	state.host = a.host
+	state.cfg = newConfigManager(a.config, a.watch, onConfigChange)
 
 	srv := &http.Server{
-		Addr:    net.JoinHostPort(host, strconv.Itoa(port)),
+		Addr:    net.JoinHostPort(a.host, strconv.Itoa(a.port)),
 		Handler: routes(),
 	}
 
 	sigCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
 
-	fmt.Printf("Starting UI on http://%s:%d\n", host, port)
+	fmt.Printf("Starting UI on http://%s:%d\n", a.host, a.port)
 	served := make(chan error, 1)
 	go func() { served <- srv.ListenAndServe() }()
 

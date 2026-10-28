@@ -30,6 +30,7 @@ Usage:
   llmsw list [TYPE]            models in the config (also: ls)
   llmsw ps                     models that are up (also: status)
   llmsw stop MODEL...          unload models; --all unloads every one
+  llmsw completion fish        print the completion script for fish
 
 The client commands talk to the server at $LLMSW_HOST (default localhost:11435).
 Run "llmsw COMMAND -h" for a command's flags.
@@ -281,14 +282,20 @@ func psCommand(args []string) {
 	}
 }
 
-func stopCommand(args []string) {
+func stopFlags(all *bool) *flag.FlagSet {
 	fs := flag.NewFlagSet("stop", flag.ExitOnError)
-	all := fs.Bool("all", false, "unload every model that is up")
+	fs.BoolVar(all, "all", false, "unload every model that is up")
 	fs.Usage = func() {
 		fmt.Fprint(fs.Output(), "Usage: llmsw stop MODEL...\n       llmsw stop --all\n\n"+
 			"Unload models, named as ps names them.\n\nFlags:\n")
 		printFlags(fs, nil)
 	}
+	return fs
+}
+
+func stopCommand(args []string) {
+	all := new(bool)
+	fs := stopFlags(all)
 	fs.Parse(args)
 	// Neither would be a stop-all nobody asked for; both, a contradiction.
 	if *all == (fs.NArg() > 0) {

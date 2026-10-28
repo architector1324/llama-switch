@@ -50,6 +50,7 @@ func TestComplete(t *testing.T) {
 		{"run voice", "", func(c []string) bool { return len(c) == 0 }, "speech is text only"},
 		{"stop", "-", func(c []string) bool { return fmt.Sprint(names(c)) == "[--all]" }, "stop's flag"},
 		{"stop", "", func(c []string) bool { return len(c) == 0 }, "nothing up"},
+		{"ps", "", func(c []string) bool { return len(c) == 0 }, "nothing up for ps"},
 		{"ls", "", func(c []string) bool { return fmt.Sprint(c) == fmt.Sprint(sections) }, "the types"},
 		{"serve", "-", func(c []string) bool { return has(names(c), "--host", "--config") && !has(names(c), "-H") }, "long names only"},
 		{"serve --config", "", func(c []string) bool { return fmt.Sprint(c) == "["+filesMarker+"]" }, "the config file"},
@@ -80,5 +81,8 @@ func TestComplete(t *testing.T) {
 	}
 	if got := complete(h.url, []string{"stop", "zeta"}, ""); len(got) != 0 {
 		t.Errorf("stop zeta: %q", got)
+	}
+	if got := complete(h.url, []string{"ps"}, ""); fmt.Sprint(got) != "[zeta\tllm]" {
+		t.Errorf("ps: %q", got)
 	}
 }

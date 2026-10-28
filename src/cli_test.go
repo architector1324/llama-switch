@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -466,5 +467,78 @@ func TestStop(t *testing.T) {
 	}
 	if got := h.running(); len(got) != 0 || out.String() != "Stopped 2 model(s)\n" {
 		t.Errorf("--all: running %v, printed %q", got, out.String())
+	}
+}
+
+func TestPsShowsDetails(t *testing.T) {
+	h := newHarness(t)
+	h.ok("POST", "/api/multi", map[string]any{"multi": true})
+	h.start(map[string]any{"model_key": "zeta", "quantization": "q8", "parallel": 2})
+	h.start(map[string]any{"model_key": "img"})
+	h.start(map[string]any{"model_key": "voice"})
+	h.ok("POST", "/v1/chat/completions", map[string]any{"model": "zeta-q8", "messages": []any{}})
+	h.waitFor("the answer's speeds", func() bool {
+		s, _ := h.instance("zeta")["stats"].(map[string]any)
+		return s["gen_speed"] != 0.0
+	})
+
+	var out bytes.Buffer
+	if err := printDetails(h.url, []string{"zeta-q8", "img", "voice"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	got := regexp.MustCompile(`port \d+, pid \d+`).ReplaceAllString(out.String(), "port N, pid N")
+	// The dashboard's panel for each kind: memory rolled up per card, the host's as RAM.
+	want := `zeta-q8
+  state:             running, port N, pid N
+  type:              llm, q8
+  gpu:               default
+  context:           2 x 4096
+  preserve thinking: off
+  ctx usage:         73 / 4096
+  prompt speed:      2355.46 tokens/s
+  gen speed:         400.00 tokens/s
+  total tokens:      20
+  model memory:      2.5 GiB
+  context memory:    51 MiB
+  Vulkan0:           662 MiB (model 611 MiB, context 51 MiB)
+  Vulkan1:           1.8 GiB
+  RAM:               100 MiB
+
+img
+  state:             running, port N, pid N
+  type:              sd, q8_0
+  gpu:               default
+  size:              1024x1024
+  hires:             off
+  step time:         -
+  last image:        -
+  progress:          -
+  images:            0
+  params memory:     -
+  compute buffer:    -
+
+voice
+  state:             running, port N, pid N
+  type:              tts, q8
+  gpu:               default
+  max frames:        2048
+  speed:             -
+  last clip:         -
+  frames:            -
+  clips:             0
+`
+	if got != want {
+		t.Errorf("got\n%s\nwant\n%s", got, want)
+	}
+
+	// As with stop, every name is checked first.
+	for names, want := range map[string]string{
+		"img nope": "Model nope not found; `llmsw list` shows the ones there are",
+		"img zeta": "zeta is not running; `llmsw ps` shows what is",
+	} {
+		out.Reset()
+		if err := printDetails(h.url, strings.Fields(names), &out); err == nil || err.Error() != want || out.Len() != 0 {
+			t.Errorf("ps %s: %v, printed %q", names, err, out.String())
+		}
 	}
 }

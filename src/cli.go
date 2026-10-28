@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -28,7 +29,8 @@ Usage:
   llmsw serve [flags]          start the server and its dashboard
   llmsw run MODEL [PROMPT]     chat with a model, loading it first if needed
   llmsw list [TYPE]            models in the config (also: ls)
-  llmsw ps                     models that are up (also: status)
+  llmsw ps [MODEL...]          models that are up, or the details of those named
+                               (also: status)
   llmsw stop MODEL...          unload models; --all unloads every one
   llmsw completion fish        print the completion script for fish
 
@@ -120,21 +122,22 @@ type listedModel struct {
 }
 
 type runningInstance struct {
-	Model        string `json:"model"`
-	Quantization string `json:"quantization"`
-	Kind         string `json:"kind"`
-	Label        string `json:"label"`
-	Devices      string `json:"devices"`
-	Port         int    `json:"port"`
-	Running      bool   `json:"running"`
-	Ready        bool   `json:"ready"`
-	Ctx          int    `json:"ctx"`
-	Parallel     int    `json:"parallel"`
-	Stats        struct {
-		MemModel   float64 `json:"mem_model"`
-		MemContext float64 `json:"mem_context"`
-		MemCompute float64 `json:"mem_compute"`
-	} `json:"stats"`
+	Model         string `json:"model"`
+	Quantization  string `json:"quantization"`
+	Kind          string `json:"kind"`
+	Label         string `json:"label"`
+	Devices       string `json:"devices"`
+	Port          int    `json:"port"`
+	PID           int    `json:"pid"`
+	Running       bool   `json:"running"`
+	Ready         bool   `json:"ready"`
+	Ctx           int    `json:"ctx"`
+	Parallel      int    `json:"parallel"`
+	PreserveThink bool   `json:"preserve_think"`
+	Res           string `json:"res"`
+	Hires         bool   `json:"hires"`
+	Frames        int    `json:"frames"`
+	Stats         Stats  `json:"stats"`
 }
 
 func instanceKey(model, quant string) string { return model + "\x00" + quant }
@@ -147,6 +150,23 @@ func (i runningInstance) state() string {
 		return "loading"
 	}
 	return "running"
+}
+
+func (i runningInstance) gpu() string {
+	if i.Devices == "" {
+		return "default"
+	}
+	return i.Devices
+}
+
+func (i runningInstance) context() string {
+	switch {
+	case i.Ctx <= 0:
+		return "-"
+	case i.Parallel > 1:
+		return fmt.Sprintf("%d x %d", i.Parallel, i.Ctx)
+	}
+	return strconv.Itoa(i.Ctx)
 }
 
 func fetchModels(server string) ([]listedModel, error) {
@@ -228,24 +248,13 @@ func printRunning(server string, w io.Writer) error {
 		if name == "" {
 			name = i.Label
 		}
-		gpu := i.Devices
-		if gpu == "" {
-			gpu = "default"
-		}
-		context := "-"
-		if i.Ctx > 0 {
-			context = strconv.Itoa(i.Ctx)
-			if i.Parallel > 1 {
-				context = fmt.Sprintf("%d x %d", i.Parallel, i.Ctx)
-			}
-		}
 		port := "-"
 		if i.Port > 0 {
 			port = strconv.Itoa(i.Port)
 		}
 		mem := i.Stats.MemModel + i.Stats.MemContext + i.Stats.MemCompute
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			name, i.Kind, i.state(), formatMemory(mem), gpu, context, port)
+			name, i.Kind, i.state(), formatMemory(mem), i.gpu(), i.context(), port)
 	}
 	return tw.Flush()
 }
@@ -270,16 +279,154 @@ func listCommand(args []string) {
 func psCommand(args []string) {
 	fs := flag.NewFlagSet("ps", flag.ExitOnError)
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: llmsw ps\n\nModels that are up: their state, memory, cards, context window and port.")
+		fmt.Fprintln(fs.Output(), "Usage: llmsw ps [MODEL...]\n\nModels that are up: their state, memory, cards, context window and port.\n"+
+			"Given names, as ps names them, what the dashboard shows of each.")
 	}
 	fs.Parse(args)
+	var err error
 	if fs.NArg() > 0 {
-		fs.Usage()
-		os.Exit(2)
+		err = printDetails(serverURL(), fs.Args(), os.Stdout)
+	} else {
+		err = printRunning(serverURL(), os.Stdout)
 	}
-	if err := printRunning(serverURL(), os.Stdout); err != nil {
+	if err != nil {
 		fail(err)
 	}
+}
+
+// What the dashboard shows of each model named: its settings, the counters
+// for its kind and where its memory went.
+func printDetails(server string, names []string, w io.Writer) error {
+	instances, err := namedInstances(server, names)
+	if err != nil {
+		return err
+	}
+	for n, i := range instances {
+		if n > 0 {
+			fmt.Fprintln(w)
+		}
+		printInstance(w, names[n], i)
+	}
+	return nil
+}
+
+func printInstance(w io.Writer, name string, i runningInstance) {
+	line := func(label, value string) { fmt.Fprintf(w, "  %-19s%s\n", label+":", value) }
+	// "-" for a figure not there yet, as the dashboard has it.
+	figure := func(ok bool, format string, a ...any) string {
+		if !ok {
+			return "-"
+		}
+		return fmt.Sprintf(format, a...)
+	}
+	onOff := func(b bool) string {
+		if b {
+			return "on"
+		}
+		return "off"
+	}
+	s := i.Stats
+
+	fmt.Fprintln(w, name)
+	state := i.state()
+	if i.Running && i.Port > 0 {
+		state += fmt.Sprintf(", port %d, pid %d", i.Port, i.PID)
+	}
+	line("state", state)
+	kind := i.Kind
+	if i.Quantization != "" {
+		kind += ", " + i.Quantization
+	}
+	line("type", kind)
+	line("gpu", i.gpu())
+
+	switch i.Kind {
+	case "llm":
+		line("context", i.context())
+		line("preserve thinking", onOff(i.PreserveThink))
+		line("ctx usage", fmt.Sprintf("%d / %d", s.CtxUsed, i.Ctx))
+		line("prompt speed", figure(s.PromptSpeed > 0, "%.2f tokens/s", s.PromptSpeed))
+		line("gen speed", figure(s.GenSpeed > 0, "%.2f tokens/s", s.GenSpeed))
+		line("total tokens", strconv.Itoa(s.TotalTokens))
+	case "decision":
+		line("context", i.context())
+		line("decision", figure(s.DecisionMs > 0, "%.0f ms", s.DecisionMs))
+		line("prompt", figure(s.DecisionTokens > 0, "%d tokens", s.DecisionTokens))
+		line("requests", strconv.Itoa(s.DecisionCount))
+	case "sd":
+		line("size", figure(i.Res != "", "%s", i.Res))
+		line("hires", onOff(i.Hires))
+		line("step time", figure(s.SdSpeed > 0, "%.2f s/it", s.SdSpeed))
+		line("last image", figure(s.SdLastTime > 0, "%.2f s", s.SdLastTime))
+		progress := figure(s.SdSteps > 0, "%d / %d", s.SdStep, s.SdSteps)
+		if s.SdSteps > 0 && s.SdSize != "" {
+			progress += " · " + s.SdSize
+		}
+		line("progress", progress)
+		line("images", strconv.Itoa(s.SdImages))
+		line("params memory", formatMemory(s.MemModel))
+		line("compute buffer", formatMemory(s.MemCompute))
+	case "tts":
+		line("max frames", figure(i.Frames > 0, "%d", i.Frames))
+		line("speed", figure(s.TtsRtf > 0, "%.1fx realtime", 1/s.TtsRtf))
+		line("last clip", figure(s.TtsAudio > 0, "%.1f s / %.1f s", s.TtsAudio, s.TtsLastTime))
+		line("frames", figure(s.TtsFrames > 0, "%d", s.TtsFrames))
+		line("clips", strconv.Itoa(s.TtsClips))
+	}
+
+	if i.Kind == "llm" || i.Kind == "decision" {
+		line("model memory", formatMemory(s.MemModel))
+		line("context memory", formatMemory(s.MemContext))
+	}
+	if i.Kind == "llm" || i.Kind == "decision" || i.Kind == "sd" {
+		for _, d := range deviceMemory(s.MemDevices) {
+			line(d[0], d[1])
+		}
+	}
+}
+
+// Memory by where it landed, rolled up as the dashboard does it: each card on
+// its own, the host's buffers together as RAM, after them.
+func deviceMemory(devices map[string]MemSlot) [][2]string {
+	groups := map[string]MemSlot{}
+	for name, m := range devices {
+		if up := strings.ToUpper(name); strings.HasPrefix(up, "CPU") || strings.HasSuffix(up, "_HOST") {
+			name = "RAM"
+		}
+		g := groups[name]
+		g.Model, g.Context, g.Compute = g.Model+m.Model, g.Context+m.Context, g.Compute+m.Compute
+		groups[name] = g
+	}
+	names := make([]string, 0, len(groups))
+	for name := range groups {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(a, b int) bool {
+		if (names[a] == "RAM") != (names[b] == "RAM") {
+			return names[b] == "RAM"
+		}
+		return names[a] < names[b]
+	})
+
+	var out [][2]string
+	for _, name := range names {
+		g := groups[name]
+		var parts []string
+		for _, p := range []struct {
+			what string
+			mib  float64
+		}{{"model", g.Model}, {"context", g.Context}, {"compute", g.Compute}} {
+			if p.mib > 0 {
+				parts = append(parts, p.what+" "+formatMemory(p.mib))
+			}
+		}
+		text := formatMemory(g.Model + g.Context + g.Compute)
+		if len(parts) > 1 {
+			text += " (" + strings.Join(parts, ", ") + ")"
+		}
+		out = append(out, [2]string{name, text})
+	}
+	return out
 }
 
 func stopFlags(all *bool) *flag.FlagSet {
@@ -332,39 +479,49 @@ func stopModels(server string, names []string, all bool, out io.Writer) error {
 		return nil
 	}
 
-	models, err := fetchModels(server)
+	instances, err := namedInstances(server, names)
 	if err != nil {
 		return err
+	}
+	for n, i := range instances {
+		if _, err := stop("?model=" + url.QueryEscape(i.Model)); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "Stopped %s\n", names[n])
+	}
+	return nil
+}
+
+// The instances behind the models named, as ps names them. Every name is
+// checked before any is used, so a typo in the list does nothing half-way.
+func namedInstances(server string, names []string) ([]runningInstance, error) {
+	models, err := fetchModels(server)
+	if err != nil {
+		return nil, err
 	}
 	instances, err := fetchInstances(server)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	up := map[string]bool{}
+	up := map[string]runningInstance{}
 	for _, i := range instances {
-		up[instanceKey(i.Model, i.Quantization)] = true
+		up[instanceKey(i.Model, i.Quantization)] = i
 	}
 	byName := map[string]listedModel{}
 	for _, m := range models {
 		byName[m.Name] = m
 	}
-	var keys []string
+	var out []runningInstance
 	for _, name := range names {
 		m, ok := byName[name]
 		if !ok {
-			return fmt.Errorf("Model %s not found; `llmsw list` shows the ones there are", name)
+			return nil, fmt.Errorf("Model %s not found; `llmsw list` shows the ones there are", name)
 		}
-		if !up[instanceKey(m.Details.ParentModel, m.Details.QuantizationLevel)] {
-			return fmt.Errorf("%s is not running; `llmsw ps` shows what is", name)
+		i, ok := up[instanceKey(m.Details.ParentModel, m.Details.QuantizationLevel)]
+		if !ok {
+			return nil, fmt.Errorf("%s is not running; `llmsw ps` shows what is", name)
 		}
-		keys = append(keys, m.Details.ParentModel)
+		out = append(out, i)
 	}
-
-	for i, key := range keys {
-		if _, err := stop("?model=" + url.QueryEscape(key)); err != nil {
-			return err
-		}
-		fmt.Fprintf(out, "Stopped %s\n", names[i])
-	}
-	return nil
+	return out, nil
 }

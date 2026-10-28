@@ -85,6 +85,8 @@ func complete(server string, words []string, cur string) []string {
 		if len(words) == 0 {
 			return sections
 		}
+	case "ps", "status":
+		return runningNames(server, words)
 	case "stop":
 		fs := stopFlags(new(bool))
 		args, _ := positionals(fs, words, 1)

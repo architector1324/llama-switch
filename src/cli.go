@@ -15,6 +15,8 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	"golang.org/x/term"
 )
 
 // --- Client commands: run, list, ps ---
@@ -61,10 +63,8 @@ func fail(err error) {
 	os.Exit(1)
 }
 
-func isTerminal(f *os.File) bool {
-	st, err := f.Stat()
-	return err == nil && st.Mode()&os.ModeCharDevice != 0
-}
+// A real tty: /dev/null is a character device too.
+func isTerminal(f *os.File) bool { return term.IsTerminal(int(f.Fd())) }
 
 func unreachable(server string, err error) error {
 	return fmt.Errorf("could not reach the server at %s; is `llmsw serve` running? (%v)", server, err)

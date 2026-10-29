@@ -298,7 +298,7 @@ Management:
 | --- | --- |
 | `GET /api/status[?model=]` | every running instance, plus the remembered settings |
 | `POST /api/start` | start a model with the given settings |
-| `POST /api/stop[?model=]` | stop one model, or all of them |
+| `POST /api/stop[?model=]` | stop one model, or all of them; the reply lists the ones stopped |
 | `POST /api/reset[?model=\|?kind=]` | settings back to defaults, restarting what they apply to; without a query, everything |
 | `POST /api/multi` | `{"multi": true}` to keep several models, `false` to evict on every start |
 | `GET /api/logs[?model=]`, `GET /api/logs/owner[?model=]`, `POST /api/logs/clear[?model=]` | a model's log |

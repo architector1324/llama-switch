@@ -105,7 +105,7 @@ func complete(server string, words []string, cur string) []string {
 // Once the model is named, only the flags for its kind.
 func completeRun(server string, words []string, cur string) []string {
 	fs := runFlags(&runArgs{})
-	args, pending := positionals(fs, words, 2)
+	args, pending := positionals(fs, words, -1)
 	kind := ""
 	if len(args) > 0 {
 		if m, err := findModel(server, args[0]); err == nil {
@@ -120,7 +120,7 @@ func completeRun(server string, words []string, cur string) []string {
 	switch {
 	case pending != nil:
 		return flagValues(server, pending, cur)
-	case strings.HasPrefix(cur, "-") && len(args) < 2:
+	case strings.HasPrefix(cur, "-") && !slices.Contains(words, "--"):
 		// --gpu=Vulkan1 is one word.
 		if name, value, ok := strings.Cut(strings.TrimLeft(cur, "-"), "="); ok {
 			f := fs.Lookup(name)
@@ -147,14 +147,15 @@ func completeRun(server string, words []string, cur string) []string {
 	return nil
 }
 
-// The words that are neither flags nor their values, and the flag the word
-// being typed is the value of, if it is one. Flags end where the command's own
-// parsing ends them, at the positional numbered flagsUntil.
+// Non-flag words and the flag awaiting a value; flags end at "--" or after flagsUntil words (-1: never).
 func positionals(fs *flag.FlagSet, words []string, flagsUntil int) ([]string, *flag.Flag) {
 	var args []string
 	for i := 0; i < len(words); i++ {
 		w := words[i]
-		if len(args) >= flagsUntil || !strings.HasPrefix(w, "-") || w == "-" {
+		if w == "--" {
+			return append(args, words[i+1:]...), nil
+		}
+		if flagsUntil >= 0 && len(args) >= flagsUntil || !strings.HasPrefix(w, "-") || w == "-" {
 			args = append(args, w)
 			continue
 		}

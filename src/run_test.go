@@ -55,6 +55,26 @@ func TestCheckRunFlags(t *testing.T) {
 	}
 }
 
+func TestParseAnywhere(t *testing.T) {
+	for _, tc := range []struct {
+		args, rest      string
+		output          string
+		noPlay, verbose bool
+	}{
+		{`Hi there`, `[Hi there]`, "", false, false},
+		{`Hi -o t.wav --no-play`, `[Hi]`, "t.wav", true, false},
+		{`--verbose Hi there --no-play`, `[Hi there]`, "", true, true},
+		{`Hi -- --no-play -o`, `[Hi --no-play -o]`, "", false, false},
+		{`a.mp3 -o out b.mp3`, `[a.mp3 b.mp3]`, "out", false, false},
+	} {
+		var a runArgs
+		rest := parseAnywhere(runFlags(&a), strings.Fields(tc.args))
+		if fmt.Sprint(rest) != tc.rest || a.output != tc.output || a.noPlay != tc.noPlay || a.verbose != tc.verbose {
+			t.Errorf("%s: %q, -o %q, --no-play %v, --verbose %v", tc.args, rest, a.output, a.noPlay, a.verbose)
+		}
+	}
+}
+
 func settings(flags map[string]any) runSettings {
 	s := runSettings{set: map[string]bool{}}
 	for name, v := range flags {

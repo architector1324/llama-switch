@@ -83,6 +83,9 @@ The dashboard's settings are flags too: --gpu, --ctx, --parallel,
 starts with it, as a change on the dashboard would restart it; whatever is not
 given stays as it was.
 
+Flags go before the model or anywhere after it, the prompt's words included;
+after --, every word is the prompt's.
+
 Flags:
 `
 
@@ -155,9 +158,7 @@ func runCommand(args []string) {
 		os.Exit(2)
 	}
 	model := fs.Arg(0)
-	// Flags may follow the model too.
-	fs.Parse(fs.Args()[1:])
-	rest := fs.Args()
+	rest := parseAnywhere(fs, fs.Args()[1:])
 	prompt := strings.Join(rest, " ")
 	s := a.settings
 	s.set = map[string]bool{}
@@ -245,6 +246,23 @@ func runCommand(args []string) {
 	}
 	if err != nil {
 		fail(err)
+	}
+}
+
+// Flags may go anywhere after the model; after "--" the rest is the prompt.
+func parseAnywhere(fs *flag.FlagSet, args []string) []string {
+	var rest []string
+	for {
+		fs.Parse(args)
+		parsed := args[:len(args)-fs.NArg()]
+		args = fs.Args()
+		if len(parsed) > 0 && parsed[len(parsed)-1] == "--" {
+			return append(rest, args...)
+		}
+		if len(args) == 0 {
+			return rest
+		}
+		rest, args = append(rest, args[0]), args[1:]
 	}
 }
 

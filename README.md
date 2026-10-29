@@ -138,7 +138,7 @@ The dashboard's settings are flags too, each for the types the dashboard shows i
 | `--frames N` | `tts` | **Max Frames** |
 | `--single` | every type | **Multi-model** off, set before the model loads, so the model runs alone; `--single=false` turns it back on |
 
-A flag for another type is an error rather than quietly ignored.
+A flag for another type is an error rather than quietly ignored. Flags go before the model or anywhere after it, among the prompt's words too; after `--` every word is the prompt's, so `llmsw run gemma4 -- what does -la do` sends the dash along.
 
 A language model's reasoning is shown dimmed, between `Thinking...` and `...done thinking.`, while the answer goes to a terminal; `--hide-thinking` leaves it out, and so does sending the output anywhere else. While the server works, the spinner says what it is waiting for: `loading MODEL`, or for an image `step 3/8`. A model that takes longer to load than the server's one-minute wait is simply waited for.
 

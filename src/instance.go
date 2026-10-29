@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -285,14 +284,13 @@ func terminate(inst *Instance) {
 	if !inst.alive() {
 		return
 	}
-	pgid := inst.cmd.Process.Pid // setsid made it the group leader
-	if err := syscall.Kill(-pgid, syscall.SIGTERM); err != nil {
+	if err := killTree(inst.cmd.Process, false); err != nil {
 		return
 	}
 	select {
 	case <-inst.done:
 	case <-time.After(5 * time.Second):
-		syscall.Kill(-pgid, syscall.SIGKILL)
+		killTree(inst.cmd.Process, true)
 	}
 }
 
@@ -657,11 +655,10 @@ func startModelServer(req StartRequest, replaceOnly bool) (StartResult, error) {
 	if err != nil {
 		return StartResult{}, err
 	}
-	cmd := exec.Command("/bin/sh", "-c", cmdStr)
+	cmd := shellCommand(cmdStr)
 	cmd.Stdout = pw
 	cmd.Stderr = pw
 	cmd.Env = childEnv
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		pr.Close()
 		pw.Close()

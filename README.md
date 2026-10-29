@@ -33,7 +33,7 @@ Llama Switch puts one dashboard and one OpenAI-compatible endpoint in front of s
 
 ## Prerequisites
 
-- **Go 1.22+**, only to build. The result is one static binary with the dashboard embedded in it; it needs nothing else at runtime.
+- **Go 1.26+**, only to build. The result is one static binary with the dashboard embedded in it; it needs nothing else at runtime.
 - **llama-server**: the binary from `llama.cpp`, in `PATH` or given by absolute path in the config. The GPU picker lists the cards that `llama-server --list-devices` reports, so this one is needed even if you only run other engines.
 - Optional, only for the sections you use: `sd-server` from `stable-diffusion.cpp`, `tts-server` from `qwentts.cpp`, `audiocpp-server` from `audio.cpp` (upstream builds it as `audiocpp_server`).
 - Optional, for the `stt` section: `ffmpeg`. audio.cpp transcribes WAV only, so any other upload (mp3 from Open WebUI, webm from a browser recording) is converted to 16 kHz mono WAV first.

@@ -7,11 +7,18 @@ One dashboard and one OpenAI-compatible endpoint for local engines: [llama.cpp](
 ## Installation
 
 ```bash
+curl -L -o ~/.local/bin/llmsw https://github.com/architector1324/llama-switch/releases/latest/download/llmsw-linux-amd64
+chmod +x ~/.local/bin/llmsw
+```
+
+On Windows, take `llmsw-windows-amd64.exe` from [Releases](https://github.com/architector1324/llama-switch/releases). Or build it, with Go 1.26+:
+
+```bash
 git clone https://github.com/architector1324/llama-switch.git
 cd llama-switch/src && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o ~/.local/bin/llmsw .
 ```
 
-Building needs Go 1.26+. At runtime: `llama-server`, plus the engines of the sections you use. Optional: `ffmpeg` (audio uploads that are not WAV), `vulkaninfo` (PCI addresses in the GPU picker).
+At runtime: `llama-server`, plus the engines of the sections you use. Optional: `ffmpeg` (audio uploads that are not WAV), `vulkaninfo` (PCI addresses in the GPU picker).
 
 ## Usage
 

@@ -7,11 +7,18 @@
 ## Установка
 
 ```bash
+curl -L -o ~/.local/bin/llmsw https://github.com/architector1324/llama-switch/releases/latest/download/llmsw-linux-amd64
+chmod +x ~/.local/bin/llmsw
+```
+
+На Windows скачайте `llmsw-windows-amd64.exe` из [Releases](https://github.com/architector1324/llama-switch/releases). Или соберите сами, нужен Go 1.26+:
+
+```bash
 git clone https://github.com/architector1324/llama-switch.git
 cd llama-switch/src && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o ~/.local/bin/llmsw .
 ```
 
-Для сборки нужен Go 1.26+. Для работы: `llama-server` и движки тех секций, которыми пользуетесь. Опционально: `ffmpeg` (загрузка аудио не в WAV), `vulkaninfo` (PCI-адреса в выборе GPU).
+Для работы: `llama-server` и движки тех секций, которыми пользуетесь. Опционально: `ffmpeg` (загрузка аудио не в WAV), `vulkaninfo` (PCI-адреса в выборе GPU).
 
 ## Использование
 

@@ -19,10 +19,7 @@ import (
 	"golang.org/x/term"
 )
 
-// --- Client commands: run, list, ps ---
-//
-// They talk to a running server over its own HTTP API, the way ollama's do, so
-// they work the same against this machine or another one.
+// --- Client commands: run, list, ps, over the server's HTTP API ---
 
 const usageText = `llmsw runs local inference engines side by side behind one dashboard and one
 OpenAI-compatible endpoint.
@@ -70,8 +67,7 @@ func unreachable(server string, err error) error {
 	return fmt.Errorf("could not reach the server at %s; is `llmsw serve` running? (%v)", server, err)
 }
 
-// The reason an answer gives for failing: this server says {"detail": ...},
-// llama-server {"error": {"message": ...}}.
+// The error an answer carries: {"detail": ...} here, {"error": {"message": ...}} from llama-server.
 func errorMessage(resp *http.Response) string {
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
@@ -146,9 +142,7 @@ func instanceKey(model, quant string) string { return model + "\x00" + quant }
 // What a model at work is doing, by kind; the rest generate.
 var workingStates = map[string]string{"stt": "transcribing", "decision": "deciding"}
 
-// Requests through the switch tell work from rest at once; the engine's own
-// slots also see what came to its port directly, and when it is still
-// reading the prompt.
+// Proxied requests show work at once; the engine's slots also catch direct requests and prefill.
 func (i runningInstance) state() string {
 	switch {
 	case !i.Running:
@@ -253,8 +247,7 @@ func printModels(server, kind string, w io.Writer) error {
 	return tw.Flush()
 }
 
-// The names instances go by, keyed by instanceKey: the ones run and the API
-// take, not the internal label.
+// Instance names as run and the API take them, keyed by instanceKey.
 func instanceNames(server string) (map[string]string, error) {
 	models, err := fetchModels(server)
 	if err != nil {
@@ -330,8 +323,7 @@ func psCommand(args []string) {
 	}
 }
 
-// What the dashboard shows of each model named: its settings, the counters
-// for its kind and where its memory went.
+// What the dashboard shows of each model named.
 func printDetails(server string, names []string, w io.Writer) error {
 	instances, err := namedInstances(server, names)
 	if err != nil {
@@ -421,8 +413,7 @@ func printInstance(w io.Writer, name string, i runningInstance) {
 	}
 }
 
-// Memory by where it landed, rolled up as the dashboard does it: each card on
-// its own, the host's buffers together as RAM, after them.
+// Memory per card, then the host's buffers together as RAM.
 func deviceMemory(devices map[string]MemSlot) [][2]string {
 	groups := map[string]MemSlot{}
 	for name, m := range devices {
@@ -490,8 +481,7 @@ func stopCommand(args []string) {
 	}
 }
 
-// Every name is checked before anything stops, so a typo in the list does not
-// leave half of it unloaded.
+// Every name is checked first, so a typo stops nothing.
 func stopModels(server string, names []string, all bool, out io.Writer) error {
 	stop := func(query string) ([]runningInstance, error) {
 		resp, err := post(context.Background(), server, "/api/stop"+query, "application/json", nil)
@@ -506,8 +496,7 @@ func stopModels(server string, names []string, all bool, out io.Writer) error {
 		return res.Models, err
 	}
 
-	// One request stops them all, so nothing started meanwhile is missed; the
-	// reply says which they were.
+	// One request for all; the reply names the ones stopped.
 	if all {
 		stopped, err := stop("")
 		if err != nil {
@@ -544,8 +533,7 @@ func stopModels(server string, names []string, all bool, out io.Writer) error {
 	return nil
 }
 
-// The instances behind the models named, as ps names them. Every name is
-// checked before any is used, so a typo in the list does nothing half-way.
+// The instances behind the names ps shows; all are checked before any is used.
 func namedInstances(server string, names []string) ([]runningInstance, error) {
 	models, err := fetchModels(server)
 	if err != nil {

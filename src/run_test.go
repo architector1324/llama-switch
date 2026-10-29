@@ -634,8 +634,7 @@ func TestExtractFiles(t *testing.T) {
 		t.Errorf("missing image: %v", err)
 	}
 
-	// A chat's message: other kinds too, its lines kept, a path to nothing left
-	// in the question about it.
+	// Chat: other kinds too, lines kept, a path to nothing left in the text.
 	clip := filepath.Join(dir, "clip.mp4")
 	os.WriteFile(clip, []byte("x"), 0o600)
 	media := []string{"image", "audio", "video"}

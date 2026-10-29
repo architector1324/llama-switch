@@ -301,8 +301,7 @@ func TestWavMultipartConverts(t *testing.T) {
 	}
 }
 
-// audio.cpp tells a WAV by its file name, so a WAV under another name is
-// renamed, its bytes left as they are.
+// A WAV under another name is renamed, its bytes untouched.
 func TestWavMultipartRenamesAWavUnderAnotherName(t *testing.T) {
 	wav := []byte("RIFF....WAVEdata")
 	body, ctype := multipartBody(t, map[string]string{"model": "ears"}, "recording", wav)

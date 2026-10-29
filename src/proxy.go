@@ -51,9 +51,7 @@ func resolveModel(requested, kind string) (string, string, error) {
 	if key, quant, ok := lookupModel(requested, kind); ok {
 		return key, quant, nil
 	}
-	// The list is served whole, so a chat client can offer an image model and the
-	// user can pick it. Calling that "not found" when it plainly is in the list
-	// would be a lie; name the endpoint that does serve it.
+	// A model of another kind is listed, so name the endpoint that serves it rather than "not found".
 	for _, other := range sections {
 		if other == kind {
 			continue
@@ -86,8 +84,7 @@ func autoloadModel(modelKey, quant string) (*Instance, error) {
 
 	opMu.Lock()
 	defer opMu.Unlock()
-	// Checked again under the lock: a request that came in alongside this one
-	// may have started it meanwhile, and starting it twice kills the first.
+	// Checked again under the lock: a concurrent request may have started it.
 	if inst := serving(modelKey, quant); inst != nil {
 		return inst, nil
 	}
@@ -139,10 +136,7 @@ var upstream = &http.Client{
 	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 }
 
-// Not forwarded. The body is resent whole with its own length, so a chunked
-// upload's Transfer-Encoding must not travel with it: both headers together make
-// llama-server answer 400 (Open WebUI streams its STT uploads chunked). The
-// transport negotiates compression itself and hands back the decoded body.
+// Not forwarded: the body is resent whole with its own length, and the transport handles compression.
 var dropHeaders = map[string]bool{
 	"Content-Length":    true,
 	"Host":              true,
@@ -156,8 +150,7 @@ var dropHeaders = map[string]bool{
 	"Upgrade":           true,
 }
 
-// A rewriter edits a successful answer on its way back; write sends a piece to
-// the client at once.
+// A rewriter edits a successful answer on its way back; write sends a piece at once.
 type rewriter func(body io.Reader, contentType string, write func([]byte))
 
 func forward(w http.ResponseWriter, r *http.Request, target string, body []byte, rewrite rewriter) {
@@ -343,8 +336,7 @@ func modelFromBody(raw []byte, contentType string) string {
 	return model
 }
 
-// Forward to the instance the body names, or to the one running instance of
-// this kind. Every proxied path is passed on as it came in.
+// To the instance the body names, or the one running instance of this kind.
 func proxyToCurrent(w http.ResponseWriter, r *http.Request, kind string, rewrite rewriter, raw []byte) {
 	if raw == nil {
 		var err error
@@ -366,8 +358,7 @@ func proxyToCurrent(w http.ResponseWriter, r *http.Request, kind string, rewrite
 			return
 		}
 	} else {
-		// No model named: serve it from the one instance of this kind, if there
-		// is exactly one. With several up, the request has to say which.
+		// No model named: the one instance of this kind, if there is exactly one.
 		state.mu.Lock()
 		var candidates []*Instance
 		for _, i := range state.ofKind(kind) {
@@ -409,11 +400,7 @@ func proxyToCurrent(w http.ResponseWriter, r *http.Request, kind string, rewrite
 	forward(w, r, target, raw, rewrite)
 }
 
-// TypeSafe-compatible System One API of the running decision model.
-//
-// Decision models answer typed questions in one forward pass and generate no
-// text, so they get their own section rather than sharing the llm one. clef in
-// particular serves this endpoint only.
+// System One API of the running decision model.
 func proxySystemOne(w http.ResponseWriter, r *http.Request) {
 	proxyToCurrent(w, r, "decision", nil, nil)
 }
@@ -456,9 +443,7 @@ func proxyAudio(w http.ResponseWriter, r *http.Request) {
 	proxyToCurrent(w, r, kind, rewrite, raw)
 }
 
-// Transcriptions go to an stt model when one is named or running, else to an llm.
-//
-// The llm path stays because a multimodal llama-server (gemma4) transcribes too.
+// Transcriptions go to an stt model when one is named or running, else to a multimodal llm.
 func asrKind(raw []byte, contentType string) string {
 	if requested := modelFromBody(raw, contentType); requested != "" {
 		if _, _, ok := lookupModel(requested, "stt"); ok {
@@ -482,11 +467,7 @@ var (
 	rePartCtyLine = regexp.MustCompile(`(?im)^content-type:.*$`)
 )
 
-// The upload's file part as WAV: audio.cpp transcribes WAV only.
-//
-// Open WebUI sends mp3 and browsers record webm, so anything that is not RIFF
-// goes through ffmpeg. audio.cpp tells a WAV by its file name, not its bytes,
-// so a WAV sent under another name ("recording", "x.bin") is renamed.
+// The upload's file part as WAV under a .wav name: audio.cpp transcribes WAV only.
 func wavMultipart(ctx context.Context, raw []byte, contentType string) ([]byte, error) {
 	delim := multipartDelimiter(contentType)
 	if delim == nil {
@@ -538,8 +519,7 @@ func wavMultipart(ctx context.Context, raw []byte, contentType string) ([]byte, 
 	return out, nil
 }
 
-// Temp files both ways: mp4/m4a keep their index at the end, and ffmpeg cannot
-// seek a pipe to find it.
+// Temp files both ways: ffmpeg cannot seek a pipe for an mp4/m4a index.
 func convertToWav(ctx context.Context, data []byte) ([]byte, error) {
 	tmp, err := os.MkdirTemp("", "llama-switch-")
 	if err != nil {
@@ -551,8 +531,7 @@ func convertToWav(ctx context.Context, data []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	// A file, not pipe:1: piped WAV has no sizes in its header, and audio.cpp
-	// rejects that ("failed to read WAV data chunk").
+	// A file, not pipe:1: piped WAV has no sizes, and audio.cpp rejects it.
 	var stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, "ffmpeg", "-loglevel", "error", "-i", src,
 		"-ac", "1", "-ar", "16000", dst)
@@ -626,8 +605,7 @@ func (f *asrHeaderFilter) flush() string {
 	return out
 }
 
-// One JSON value and nothing after it, numbers kept as written so that a
-// re-encoded event says exactly what the engine said.
+// One JSON value with numbers kept as written.
 func decodeJSON(b []byte) (any, error) {
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.UseNumber()
@@ -656,9 +634,7 @@ func readBody(body io.Reader) ([]byte, map[string]any) {
 	return raw, payload
 }
 
-// edit rewrites one event in place and says whether it did; finish releases
-// whatever edit still holds, before the first line that is not an event
-// ("data: [DONE]") or at the end of the stream.
+// edit rewrites an event and says if it did; finish flushes what edit holds at the stream's end.
 func rewriteSSE(body io.Reader, write func([]byte), edit func(map[string]any) bool, finish func() []byte) {
 	released := false
 	release := func() []byte {

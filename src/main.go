@@ -73,8 +73,7 @@ func routes() http.Handler {
 		mux.HandleFunc(method+" /v1/audio/{path...}", proxyAudio)
 	}
 
-	// Engine UIs are not republished here. They call their own paths absolutely, and
-	// those collide with this server's; "Open WebUI" points straight at the engine port.
+	// Engine UIs are not republished: their absolute paths collide with ours.
 
 	static, _ := fs.Sub(assets, "static")
 	files := http.StripPrefix("/static", http.FileServerFS(static))
@@ -128,9 +127,7 @@ var serveShortFlags = map[string]string{
 	"host": "H", "port": "p", "ctx": "c", "parallel": "np", "config": "f", "watch": "w",
 }
 
-// Like flag.PrintDefaults, but with two dashes before a long name, the way the
-// docs and the error messages write flags; a short alias shares its long
-// name's line.
+// flag.PrintDefaults with two dashes on long names, a short alias on its long name's line.
 func printFlags(fs *flag.FlagSet, short map[string]string) {
 	aliases := map[string]bool{}
 	for _, s := range short {

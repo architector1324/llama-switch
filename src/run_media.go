@@ -28,9 +28,7 @@ import (
 
 // --- run for the kinds that do not chat ---
 
-// Where a generated file goes: the -o path; stdout when that is not a
-// terminal, so `llmsw run z-image "a cat" > cat.png` works; else a new file in
-// the current directory. Returns the path written, "" for stdout.
+// The result to -o, to stdout if not a terminal, else to a new file; returns the path, "" for stdout.
 func deliver(opts runOptions, data []byte, ext string, out, errOut io.Writer) (string, error) {
 	path := opts.Output
 	if path == "" {
@@ -47,8 +45,7 @@ func deliver(opts runOptions, data []byte, ext string, out, errOut io.Writer) (s
 	return path, nil
 }
 
-// Where a note about the result goes: into the terminal, or out of the way of
-// a pipe that carries the result itself.
+// Notes go to the terminal, or to stderr when stdout carries the result.
 func noteWriter(opts runOptions, out, errOut io.Writer) io.Writer {
 	if opts.Styled {
 		return out
@@ -77,12 +74,7 @@ func joinInput(piped, prompt string) string {
 	return strings.TrimSpace(strings.TrimSpace(piped) + "\n\n" + prompt)
 }
 
-// Files of the kinds given that a message names come out of its text and go
-// with the request, the way ollama attaches them: a path, quoted, with its
-// spaces escaped, or dragged in as a file:// URL. A word that only looks like
-// a file name ("logo.png style") stays text. strict makes a path to nothing an
-// error rather than a prompt nobody meant; otherwise it stays text, as in a
-// question about that path.
+// Cuts the paths to files of the given kinds out of text; strict makes a path to nothing an error.
 func extractFiles(text string, strict bool, kinds ...string) (string, []string, error) {
 	type span struct{ start, end int }
 	var cut []span
@@ -156,8 +148,7 @@ type imageAnswer struct {
 	OutputFormat string `json:"output_format"`
 }
 
-// A prompt draws a new image; image files named in it, or given with --image,
-// are edited by it instead.
+// Draws the prompt, or edits the images named in it or given with --image.
 func generateImage(ctx context.Context, opts runOptions, prompt string, out, errOut io.Writer) error {
 	started := time.Now()
 	prompt, found, err := extractFiles(prompt, true, "image")
@@ -392,8 +383,7 @@ func wavDuration(b []byte) (time.Duration, bool) {
 
 // --- stt ---
 
-// A path as a terminal hands it over: quoted, escaped, or a file:// URL when
-// dragged in.
+// A path as a terminal hands it over: quoted, escaped or a file:// URL.
 func unquotePath(s string) string {
 	s = strings.TrimSpace(s)
 	if len(s) >= 2 && (s[0] == '\'' || s[0] == '"') && s[len(s)-1] == s[0] {
@@ -423,8 +413,7 @@ func transcribeFile(ctx context.Context, opts runOptions, path string, out, errO
 	return transcribe(ctx, opts, path, audio, out, errOut)
 }
 
-// Upload one recording and print what was said. The server turns anything
-// that is not WAV into WAV first.
+// Upload a recording and print the transcript.
 func transcribe(ctx context.Context, opts runOptions, name string, audio []byte, out, errOut io.Writer) error {
 	started := time.Now()
 	var body bytes.Buffer
@@ -469,8 +458,7 @@ func transcribe(ctx context.Context, opts runOptions, name string, audio []byte,
 
 // --- decision ---
 
-// The questions file holds {"questions": {...}}, the shape the API takes, or
-// just the questions themselves.
+// The questions file: {"questions": {...}} or just the questions.
 func readQuestions(path string) (json.RawMessage, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {

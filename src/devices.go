@@ -31,8 +31,7 @@ var (
 	devicesCache []Device // nil until the first successful listing
 )
 
-// Stdout of a command, even when it exits non-zero; an error only when it could
-// not be run at all or ran out of time.
+// A command's stdout even on a non-zero exit; an error only if it could not run or timed out.
 func runOutput(timeout time.Duration, name string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -52,10 +51,7 @@ func splitLines(s string) []string {
 	return strings.FieldsFunc(s, func(r rune) bool { return r == '\n' || r == '\r' })
 }
 
-// PCI address per Vulkan device, in the order Vulkan enumerates them.
-//
-// Two identical cards are indistinguishable by name, so the bus address is the
-// only thing that says which is which. Best-effort: no vulkaninfo, no addresses.
+// PCI address per Vulkan device, the only way to tell identical cards apart; none without vulkaninfo.
 func devicePCIAddresses() []string {
 	out, err := runOutput(15*time.Second, "vulkaninfo", "--summary")
 	if err != nil {
@@ -72,10 +68,7 @@ func parsePCIAddresses(out string) []string {
 	return addrs
 }
 
-// Offload devices as the backend itself enumerates them.
-//
-// Asking llama-server keeps the list in step with whatever backend the build
-// carries -- Vulkan here, CUDA elsewhere -- instead of hardcoding one vendor.
+// Offload devices as llama-server enumerates them, whatever backend the build has.
 func listDevices(refresh bool) []Device {
 	devicesMu.Lock()
 	defer devicesMu.Unlock()
@@ -108,8 +101,7 @@ func parseDeviceList(out string) []Device {
 	return devices
 }
 
-// Addresses go on only when there is one per device: a count that differs means
-// the two tools disagree about the cards, and a wrong label is worse than none.
+// Addresses only when there is one per device; a wrong label is worse than none.
 func labelDevices(devices []Device, pci []string) {
 	if len(pci) != len(devices) {
 		return
@@ -120,9 +112,7 @@ func labelDevices(devices []Device, pci []string) {
 	}
 }
 
-// ${DEVICES} or ${DEVICES:<flags the profile uses by default>}. Every backend
-// spells device selection differently, so the flags are built per kind rather
-// than written into the profiles.
+// ${DEVICES} or ${DEVICES:<default flags>}; the flags are built per backend.
 var reDevices = regexp.MustCompile(`\$\{DEVICES(?::([^}]*))?\}`)
 
 // "Vulkan1" -> ("vulkan", 1), for backends that take a name and an index.
@@ -130,10 +120,7 @@ var reDeviceSplit = regexp.MustCompile(`^([A-Za-z_]+)(\d+)$`)
 
 var reRoleAssign = regexp.MustCompile(`([A-Za-z_]+)=([^,\s]+)`)
 
-// Device-selection flags for one backend family.
-//
-// Empty selection keeps whatever the profile already said, so "all" is exactly
-// today's behaviour rather than a guess at it.
+// Device-selection flags for one backend family; an empty selection keeps the profile's own.
 func deviceFlags(devices, kind, defaultText string) string {
 	if devices == "" {
 		return defaultText
@@ -144,11 +131,7 @@ func deviceFlags(devices, kind, defaultText string) string {
 	}
 
 	if kind == "sd" {
-		// sd-server assigns per module, and which modules exist differs per
-		// pipeline, so the roles come from the profile's own default. A selection
-		// may name roles ("diffusion=Vulkan1,vae=Vulkan0") and then overrides only
-		// those, leaving the rest as the profile had them; a bare device name
-		// moves every role to that card.
+		// sd assigns per module: role=card pairs override those roles, a bare card moves them all.
 		var roles []string
 		assigned := map[string]string{}
 		assign := func(role, dev string) {

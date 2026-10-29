@@ -9,11 +9,7 @@ import (
 	"strings"
 )
 
-// --- Shell completion ---
-//
-// The script only asks the binary, `llmsw __complete WORD... CURRENT`, so it
-// keeps up with the config by itself: the models in it, the flags each kind of
-// model takes, the cards the server sees.
+// --- Shell completion: the script asks the binary, so it follows the config ---
 
 const fishCompletion = `# llmsw completions for fish. Install with
 #   llmsw completion fish > ~/.config/fish/completions/llmsw.fish
@@ -62,8 +58,7 @@ func completeCommand(args []string) {
 	}
 }
 
-// What fits the word being typed, cur, after words: a candidate a line, a tab
-// before what it is, as fish takes them. fish picks the ones that match.
+// Candidates for cur after words, one per line with a tab before its description, as fish takes them.
 func complete(server string, words []string, cur string) []string {
 	if len(words) == 0 {
 		var out []string
@@ -177,8 +172,7 @@ func isBoolFlag(f *flag.Flag) bool {
 	return ok && b.IsBoolFlag()
 }
 
-// The flags, with two dashes before a long name as everywhere else; the short
-// aliases are left out.
+// Long flag names with two dashes; short aliases left out.
 func flagNames(fs *flag.FlagSet, short map[string]string, fits func(string) bool) []string {
 	aliases := map[string]bool{}
 	for _, s := range short {
@@ -215,8 +209,7 @@ func flagValues(server string, f *flag.Flag, cur string) []string {
 	return nil
 }
 
-// The cards the server sees, as --gpu names them; after a comma, the ones not
-// named yet.
+// The server's cards for --gpu; after a comma, the ones not named yet.
 func gpuValues(server, cur string) []string {
 	var res struct {
 		Devices []struct {

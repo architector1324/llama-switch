@@ -99,8 +99,7 @@ type openaiModel struct {
 	Object  string `json:"object"`
 	Created int64  `json:"created"`
 	OwnedBy string `json:"owned_by"`
-	// Not part of the openai schema; lm studio does the same in its own
-	// listing, and a client that ignores it loses nothing.
+	// Not in the OpenAI schema; LM Studio adds it too, and clients ignore it.
 	Type string    `json:"type"`
 	Meta modelMeta `json:"meta"`
 }
@@ -127,11 +126,7 @@ type customModel struct {
 	Details      customModelDetails `json:"details"`
 }
 
-// OpenAI-compatible models list.
-//
-// Every section, the way other providers serve it: openai mixes dall-e and
-// whisper into the same list, ollama and lm studio tag each entry instead of
-// splitting the endpoint. The tag here is "type" plus "capabilities".
+// OpenAI-compatible list of every section's models, tagged by type.
 func handleV1Models(w http.ResponseWriter, r *http.Request) {
 	cfg := state.cfg.get()
 
@@ -217,10 +212,7 @@ func handleV1Models(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Everything that is up, plus the sticky choices the dashboard mirrors.
-//
-// "instances" is the list; the flat fields describe one of them, chosen by the
-// ?model= query, so a caller that cares about a single backend need not sift.
+// Every running instance plus the sticky settings; ?model= picks the one the flat fields describe.
 func handleStatus(w http.ResponseWriter, r *http.Request) {
 	model := r.URL.Query().Get("model")
 
@@ -396,11 +388,7 @@ func resetSection(kind string) {
 	}
 }
 
-// Settings back to their defaults, restarting whatever they apply to.
-//
-// Every field change restarts its model, so a reset -- all of them changing at
-// once -- does too. ?model= covers that model and its section, ?kind= a section
-// with nothing picked in it, neither of them every section and every model.
+// Settings back to defaults, restarting what they apply to: ?model=, ?kind= or everything.
 func handleReset(w http.ResponseWriter, r *http.Request) {
 	model := r.URL.Query().Get("model")
 	kind := r.URL.Query().Get("kind")
@@ -460,8 +448,7 @@ func handleReset(w http.ResponseWriter, r *http.Request) {
 			Parallel:      &defParallel,
 			Devices:       &devices,
 		},
-			// A single reset behaves like any field change; reset-all must
-			// restart every model, not let the first one evict the rest.
+			// Reset All restarts every model, so the first restart must not evict the rest.
 			model == "")
 		if err != nil {
 			writeError(w, newErr(http.StatusInternalServerError, "%s: %v", key, err))

@@ -49,8 +49,7 @@ type Stats struct {
 	DecisionMs     float64 `json:"decision_ms,omitempty"`
 	DecisionTokens int     `json:"decision_tokens,omitempty"`
 	DecisionCount  int     `json:"decision_count,omitempty"`
-	// llm: the slots at work at the last poll, and how many of them are still
-	// reading the prompt.
+	// llm: slots at work at the last poll, and how many are still reading the prompt.
 	SlotsBusy    int `json:"slots_busy"`
 	SlotsPrefill int `json:"slots_prefill"`
 }
@@ -61,11 +60,7 @@ func newStats() Stats {
 
 const maxLogLines = 2000
 
-// One launched backend: its process, its port, its counters, its log.
-//
-// Keeping all of it per instance is what lets an image model and a language
-// model be up at the same time. Everything above mu is set before the process
-// starts and never changes after.
+// One launched backend: process, port, counters, log; fields above mu never change after start.
 type Instance struct {
 	ModelKey      string
 	Quant         string // "" for the old single-cmd format
@@ -114,9 +109,7 @@ func (i *Instance) isReady() bool {
 	return i.ready
 }
 
-// Marks a request at work on the engine until end is called. Once none is,
-// the busy slots of the last poll are stale: the request that had them is
-// done, and the next poll finds any other.
+// Marks a request at work until end is called; the last one out clears the stale slot counts.
 func (i *Instance) begin() (end func()) {
 	i.mu.Lock()
 	i.active++
@@ -196,34 +189,25 @@ func (i *Instance) toDict() map[string]any {
 
 type ServiceState struct {
 	mu sync.Mutex
-	// Every running backend, keyed by model, in start order. One entry per model,
-	// so loading the same model again replaces it rather than doubling it.
+	// Running backends by model, one per model, in start order.
 	instances map[string]*Instance
 	order     []string
-	// On from the start. Off keeps the old behaviour: starting anything stops
-	// everything else.
+	// On by default; off, starting anything stops everything else.
 	multi      bool
 	defaultCtx int
 	// Survives sd loads and stops, so a round trip keeps the user's choice.
 	selectedCtx int
-	// Whether the next llm load pulls previous reasoning back into the prompt.
-	// Sticky like selectedCtx: a stop or an sd load must not reset the choice.
+	// Whether the next llm load keeps previous reasoning; sticky like selectedCtx.
 	selectedPreserveThink bool
-	// Server slots: how many clients may talk to one model at once. Sticky like
-	// selectedCtx. The context window is per slot, so N slots ask the engine for
-	// N times as much KV -- more slots cost memory, not context.
+	// Slots per model; sticky like selectedCtx. The context is per slot, so more slots cost memory.
 	defaultParallel  int
 	selectedParallel int
-	// Which offload devices a model may use, comma-separated as the backend
-	// names them ("Vulkan0"); empty means every device, the old behaviour.
-	// Sticky per kind, like selectedRes is to sd: a card picked for a
-	// language model says nothing about where an image model should go.
+	// Cards a model may use, per kind, as the backend names them ("Vulkan0"); empty means all.
 	selectedDevices map[string]string
 	// Frame cap for tts, apart from ctx: 2048 frames at 12.5/s is about 164 s.
 	defaultFrames  int
 	selectedFrames int
-	// Output size for sd, as "WxH". Sticky like selectedFrames: a stop or an
-	// llm load must not reset it.
+	// sd output size as "WxH"; sticky like selectedFrames.
 	defaultRes  string
 	selectedRes string
 	// Second sd pass. Sticky like selectedRes.
@@ -243,10 +227,7 @@ var state = &ServiceState{
 	host:            "0.0.0.0",
 }
 
-// Starts, stops and resets run one at a time. A request that finds its model
-// not loaded checks and starts under this, so two of them cannot both start it
-// and have the second kill the first. Kept apart from state.mu so that status
-// polls are not held up while a backend takes its time to exit.
+// Starts, stops and resets run one at a time; apart from state.mu so status polls never wait.
 var opMu sync.Mutex
 
 // Caller holds state.mu.
@@ -332,8 +313,7 @@ func stopInstance(modelKey string) *Instance {
 	return inst
 }
 
-// Stop every instance; the ones stopped, in the order they started. Caller
-// holds opMu.
+// Stop every instance; the ones stopped. Caller holds opMu.
 func stopAll() []*Instance {
 	state.mu.Lock()
 	keys := append([]string{}, state.order...)
@@ -347,10 +327,7 @@ func stopAll() []*Instance {
 	return stopped
 }
 
-// Stop running models when the config changes.
-//
-// A profile that was edited no longer describes the process that is up, and
-// the command line cannot be changed under a running backend.
+// An edited profile no longer matches its running process, so a config change stops every model.
 func onConfigChange() {
 	fmt.Println("[Service] Config change detected. Stopping any running model...")
 	opMu.Lock()
@@ -369,8 +346,7 @@ func findFreePort() (int, error) {
 
 // --- Start Logic ---
 
-// A setting the caller got wrong: unknown model, bad size, unknown card. The API
-// answers it with 404, as it always has; anything else is a 500.
+// A setting the caller got wrong, answered with 404; anything else is a 500.
 type badValue string
 
 func (e badValue) Error() string { return string(e) }
@@ -395,9 +371,7 @@ type StartResult struct {
 // Goes straight into a shell command line, so nothing but digits and one "x".
 var reRes = regexp.MustCompile(`^(\d{2,5})x(\d{2,5})$`)
 
-// ${HIRES:<flags>} keeps each model's own hires settings next to the model, because
-// they differ: a denoise strength for the image models, a whole upscaler block for ltx.
-// On, the flags go in verbatim; off, the whole placeholder disappears.
+// ${HIRES:<flags>}: the flags verbatim with Hires Fix on, nothing with it off.
 var reHires = regexp.MustCompile(`\$\{HIRES:([^}]*)\}`)
 
 // re.sub with a function: fn gets the submatches, "" for a group that did not take part.
@@ -431,8 +405,7 @@ type profileValues struct {
 // The command line a profile stands for, placeholders filled in.
 func expandProfile(tmpl string, v profileValues) string {
 	port := strconv.Itoa(v.Port)
-	// -c is the whole KV pool and llama.cpp hands each slot an equal share of it, so
-	// the window the user asked for is per slot and the pool has to be N times it.
+	// -c is the whole KV pool, shared equally by the slots, so it is the per-slot window times N.
 	ctxTotal := strconv.Itoa(v.Ctx * v.Parallel)
 	frames := strconv.Itoa(v.Frames)
 	parallel := strconv.Itoa(v.Parallel)
@@ -460,8 +433,7 @@ func expandProfile(tmpl string, v profileValues) string {
 	cmd = strings.ReplaceAll(cmd, "${HOST}", v.Host)
 	cmd = strings.ReplaceAll(cmd, "${PRESERVE_THINK}", preserveFlag)
 	cmd = strings.ReplaceAll(cmd, "${PARALLEL}", parallel)
-	// The draft model follows --device unless told otherwise, so llm needs no
-	// second flag for it.
+	// The draft model follows --device, so llm needs no second flag.
 	cmd = replaceSubmatchFunc(reDevices, cmd, func(g []string) string {
 		return deviceFlags(v.Devices, v.Kind, g[1])
 	})
@@ -484,8 +456,7 @@ func orStr(p *string, def string) string {
 	return *p
 }
 
-// Start a model, replacing whatever the eviction rule says it replaces. Caller
-// holds opMu.
+// Start a model, replacing what the eviction rule says. Caller holds opMu.
 func startModelServer(req StartRequest, replaceOnly bool) (StartResult, error) {
 	if state.cfg == nil {
 		return StartResult{}, fmt.Errorf("Config not initialized")
@@ -584,9 +555,7 @@ func startModelServer(req StartRequest, replaceOnly bool) (StartResult, error) {
 		return StartResult{}, badValue(fmt.Sprintf("Parallel slots must be 1..64, got %d", parallel))
 	}
 
-	// Same precedence as ctx. Whitelisted against what the backend reports, both
-	// because a typo would fail obscurely at launch and because this string is
-	// pasted into a shell command line.
+	// Same precedence as ctx; checked against the backend's cards, since it goes into a shell command.
 	devices := strings.TrimSpace(orStr(req.Devices, selDevices))
 	if devices != "" {
 		known := map[string]bool{}
@@ -643,17 +612,13 @@ func startModelServer(req StartRequest, replaceOnly bool) (StartResult, error) {
 
 	fmt.Printf("Starting model %s on %s:%d with command: %s\n", modelKey, host, port, cmdStr)
 
-	// The memory panel reads llama.cpp's own buffer-size lines, and those are
-	// LLAMA_LOG_INFO, which maps to trace level -- invisible at the default 3. Set
-	// here rather than in the profiles: the panel depends on it, so it must not be
-	// something a profile can quietly drop. Other backends ignore the variable.
+	// The memory panel needs llama.cpp's buffer sizes, which only trace level (4) prints.
 	childEnv := os.Environ()
 	if kind == "llm" || kind == "decision" {
 		childEnv = append(childEnv, "LLAMA_ARG_LOG_VERBOSITY=4")
 	}
 
-	// Off: starting anything clears the board, which is how it always worked.
-	// On: only the same model is replaced, so the rest keep running.
+	// Multi-model off: a start clears the board; on: only the same model is replaced.
 	state.mu.Lock()
 	multi := state.multi
 	state.mu.Unlock()
@@ -671,9 +636,7 @@ func startModelServer(req StartRequest, replaceOnly bool) (StartResult, error) {
 		Devices:  devices,
 		stats:    newStats(),
 	}
-	// sd-server has no context window; reporting one skews the UI gauge.
-	// Decision models do take -c, so they report it too; only the sticky
-	// selectedCtx stays an llm notion.
+	// Only llm and decision models have a context window.
 	if kind == "llm" || kind == "decision" {
 		inst.Ctx = ctx
 		// Only llama-server takes --parallel; sd and tts have no slots.

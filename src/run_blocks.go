@@ -9,20 +9,14 @@ import (
 	"strings"
 )
 
-// --- The code blocks of an answer, saved to files ---
-//
-// What a language model writes between fences is often a file in its own
-// right: JSON, an SVG, a script. In a terminal each one is saved the way an
-// image model's picture is, named for the model and the time, with the
-// extension its language has.
+// --- Code blocks of an answer, saved to files ---
 
 type codeBlock struct {
 	lang string // the first word after the opening fence, lowercased
 	text string
 }
 
-// The fenced blocks of a Markdown answer, closed ones only: a block the answer
-// broke off in is not a whole file.
+// The closed fenced blocks of a Markdown answer.
 func codeBlocks(answer string) []codeBlock {
 	var blocks []codeBlock
 	var fence, lang string
@@ -57,8 +51,7 @@ func codeBlocks(answer string) []codeBlock {
 	return blocks
 }
 
-// The fence s starts with: three or more backticks or tildes; "" for none. A
-// backtick in what follows makes it inline code instead, as in ```x```.
+// The fence s starts with, "" for none; a backtick after it means inline code.
 func fenceOf(s string) string {
 	for _, c := range []byte{'`', '~'} {
 		n := 0
@@ -94,8 +87,7 @@ var langExts = map[string]string{
 
 var reExt = regexp.MustCompile(`^[a-z0-9]{1,12}$`)
 
-// The extension a block's file gets: from its language, or, where it names
-// none or only a generic one, from what it holds.
+// A block's extension, from its language or, failing that, its content.
 func blockExt(b codeBlock) string {
 	body := strings.TrimSpace(b.text)
 	generic := b.lang == "" || b.lang == "xml" || b.lang == "html" || b.lang == "text" || b.lang == "plaintext"
@@ -116,8 +108,7 @@ func blockExt(b codeBlock) string {
 	return "txt"
 }
 
-// Each block to a new file in the current directory: model-time.ext, numbered
-// on when several land in the same second with the same extension.
+// Each block to a new model-time.ext file in the current directory.
 func saveBlocks(opts runOptions, answer string, out io.Writer) error {
 	for _, b := range codeBlocks(answer) {
 		path := freshName(opts.Model, blockExt(b))

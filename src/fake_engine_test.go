@@ -17,9 +17,7 @@ import (
 	"time"
 )
 
-// The engines the tests start are this test binary, run again with
-// fakeEngineEnv set: no llama.cpp, GPU or interpreter needed, and the real
-// process control, pipes and log parsing all take part.
+// Test engines are this test binary run again with fakeEngineEnv set.
 const (
 	fakeEngineEnv = "LLAMA_SWITCH_FAKE_ENGINE"
 	fakeParentEnv = "LLAMA_SWITCH_FAKE_PARENT"
@@ -52,8 +50,7 @@ func argValue(args []string, name string) string {
 }
 
 func runFakeEngine(kind string, args []string) {
-	// Engines run in a session of their own, so a test run that dies would leave
-	// them behind; they leave with it instead.
+	// Engines run in their own session, so they exit with a dying test run.
 	if parent, err := strconv.Atoi(os.Getenv(fakeParentEnv)); err == nil {
 		go func() {
 			for range time.Tick(200 * time.Millisecond) {
@@ -93,8 +90,7 @@ func runFakeEngine(kind string, args []string) {
 	http.Serve(l, fakeHandler(kind, args))
 }
 
-// What the fake engine saw of a request, sent back so a test can check what
-// the proxy forwarded.
+// What the fake engine saw of a request, so a test can check what the proxy forwarded.
 func fakeEcho(kind string, args []string, r *http.Request, body []byte) map[string]any {
 	echo := map[string]any{
 		"kind":              kind,

@@ -14,9 +14,7 @@ import (
 // --- Config Manager ---
 var sections = []string{"llm", "sd", "tts", "stt", "music", "decision"}
 
-// What a kind can do and where it is served. Published in /v1/models so a client
-// can tell the sections apart, the way ollama's "capabilities" is used; the list
-// is served whole, like every other provider serves it.
+// What each kind can do, published in /v1/models like ollama's "capabilities".
 var kindCapabilities = map[string][]string{
 	"llm":      {"completion", "chat"},
 	"sd":       {"image"},
@@ -45,9 +43,7 @@ func isSection(name string) bool {
 	return false
 }
 
-// OrderedMap is a YAML mapping that remembers its key order. A plain Go map
-// would not, and the order means something here: the first quant listed is the
-// default, and the dashboard reads it as the first key it is sent.
+// A YAML mapping that keeps key order: the first quant listed is the default.
 type OrderedMap[V any] struct {
 	Keys   []string
 	Values map[string]V
@@ -106,8 +102,7 @@ func (m OrderedMap[V]) MarshalJSON() ([]byte, error) {
 	return b.Bytes(), nil
 }
 
-// Profiles are one model's command lines by quant, or a single "cmd" in the old
-// format.
+// One model's command lines by quant, or a single "cmd" in the old format.
 type Profiles = OrderedMap[string]
 
 type Section = OrderedMap[Profiles]
@@ -125,8 +120,7 @@ func defaultQuant(p Profiles) string {
 	return p.Keys[0]
 }
 
-// Config is one loaded snapshot. Never modified once built, so it is handed out
-// without copying.
+// One loaded snapshot, never modified, so it is shared without copying.
 type Config struct {
 	Sections map[string]*Section
 	Models   *Section // every section merged

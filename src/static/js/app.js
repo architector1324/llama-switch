@@ -76,20 +76,16 @@ let currentLoadingModel = null;
 let ctxInputPristine = true; // Field still mirrors the server, untouched
 let framesInputPristine = true;
 let parallelInputPristine = true;
-// Device pickers are launch settings like the context window: once touched, the
-// status poll must stop overwriting them, or a pick made while nothing is
-// loaded is undone a few seconds later.
+// Once touched, the device pickers are not overwritten by the status poll.
 let devicesInputPristine = true;
-// With several models up, the dashboard still shows one. Default: the instance
-// of the open section; a click on a running model in the list picks that one.
+// The model the dashboard shows; null means the open section's instance.
 let focusedModel = null;
 let instances = [];
 
 function instanceFor(section) {
     const here = instances.filter(i => i.kind === section);
     const kinds = (currentConfig && currentConfig.kinds) || {};
-    // A row picked in this section wins, even when it is not loaded: then the
-    // dashboard describes what Load would start, not somebody else's instance.
+    // A row picked in this section wins, loaded or not.
     if (focusedModel && kinds[focusedModel] === section) {
         return here.find(i => i.model === focusedModel) || null;
     }
@@ -106,16 +102,14 @@ function runningInstance() {
     return instanceFor(activeSection);
 }
 
-// Everywhere else the tab is the kind. On Running the kinds are mixed, so the
-// dashboard takes the kind of the model it is showing -- or none at all.
+// The tab's kind; on Running, the kind of the model shown.
 function dashboardKind() {
     if (activeSection !== RUNNING) return activeSection;
     const inst = runningInstance();
     return inst ? inst.kind : null;
 }
 
-// Mixed kinds need a kind label per row; the order is the tab order, so a
-// restart does not shuffle the list.
+// Running instances in tab order, so a restart does not shuffle them.
 function sortedInstances() {
     const order = Object.keys(SECTION_LABELS);
     return [...instances].sort((a, b) =>
@@ -150,8 +144,7 @@ function renderRunningList(list) {
     });
 }
 
-// Green only when something is really up: alive and past loading. A model
-// still starting, or one whose process died, does not count.
+// True only when some model is alive and past loading.
 function anythingLoaded() {
     return instances.some(i => i.running && i.ready);
 }
@@ -166,11 +159,7 @@ function runningSignature() {
 }
 let preserveInputPristine = true;
 
-// Two identical cards are told apart only by index and bus address, so both go
-// in the label. "All" stays the default: the backend spreads the model itself.
-// The log belongs to one launched process; say which, so lines left by a model
-// that has since exited are not read as the current one's.
-// Returns the owner so the caller can decide whether this section sees the log.
+// Shows whose log this is; returns the owner.
 async function fetchLogsOwner() {
     const el = document.getElementById('logs-owner');
     const inst = runningInstance();
@@ -193,6 +182,7 @@ const SD_DEVICE_ROLES = [['diffusion', 'sd-dev-diffusion'],
                          ['te', 'sd-dev-te'],
                          ['vae', 'sd-dev-vae']];
 
+// Cards are labelled with index and bus address, so identical ones differ.
 async function fetchDevices() {
     const sel = document.getElementById('devices-input');
     try {
@@ -210,8 +200,7 @@ async function fetchDevices() {
             sel.innerHTML = '<option value="">All GPUs</option>' + options;
             sel.value = chosen;
         }
-        // "Profile" leaves the role where the profile put it, rather than
-        // forcing every module onto one card.
+        // "Profile" leaves the role where the profile put it.
         for (const [, id] of SD_DEVICE_ROLES) {
             const roleSel = document.getElementById(id);
             if (!roleSel) continue;
@@ -224,9 +213,7 @@ async function fetchDevices() {
     }
 }
 
-// What goes to the server: a per-role assignment on the image tab, a plain
-// device name everywhere else.
-// What the profile itself says, so "Profile" can name the card it stands for.
+// What the profile says, so "Profile" can name its card.
 function profileDeviceRoles(modelKey, quant) {
     const models = currentConfig ? currentConfig.models || {} : {};
     const entry = models[modelKey];
@@ -249,6 +236,7 @@ function renderSdProfileLabels() {
     }
 }
 
+// Per-role assignment on the image tab, a plain device name elsewhere.
 function selectedDevices() {
     if (dashboardKind() === 'sd') {
         const parts = [];
@@ -299,8 +287,7 @@ async function fetchConfig() {
 
 const SECTION_LABELS = { llm: 'Language', sd: 'Image', tts: 'Speech', stt: 'Transcription', music: 'Music', decision: 'Decision' };
 
-// The dashboard follows the tab, not the running model: otherwise it stays on
-// Language until an image model is loaded for the first time.
+// The dashboard follows the tab, not the running model.
 let activeSection = localStorage.getItem('activeSection') || 'llm';
 
 function renderSectionTabs() {
@@ -325,9 +312,7 @@ function selectSection(name) {
     renderSectionTabs();
     renderModelList(currentConfig ? currentConfig.models || {} : {});
     applyDashboardKind(dashboardKind());
-    // Draw from the cached status first so the panel changes immediately, then
-    // ask the backend: everything here is per-section, and waiting out the 5s
-    // poll left the previous tab's answers on screen.
+    // Redraw from the cached status at once, then ask the backend.
     if (lastStatus) updateStatusDisplay(lastStatus);
     pollStatus();
     refreshLogs();
@@ -407,8 +392,7 @@ function renderModelGroup(list, models, modelKeys, sectionName) {
     });
 }
 
-// Fields describe the model in focus, so a different focus must refill them
-// even though the user typed in them for the previous one.
+// A new focus refills the fields, even ones typed in.
 function resetControlPristine() {
     ctxInputPristine = true;
     parallelInputPristine = true;
@@ -417,8 +401,7 @@ function resetControlPristine() {
     devicesInputPristine = true;
 }
 
-// Any row can be picked, running or not: picking one that is not up yet is how
-// its settings get dialled in before Load.
+// Any row can be focused, so a model's settings can be set before Load.
 function focusModel(key) {
     focusedModel = key;
     resetControlPristine();
@@ -504,9 +487,7 @@ async function unloadModel(key) {
     pollStatus();
 }
 
-// Every control reloads the model to take effect, so each one must first ask
-// whether the running model is the one this tab is about. Otherwise changing
-// Output Size on the Image tab restarted a language model.
+// Reload only if the running model is the one this tab is about.
 function reloadCurrentModel() {
     const inst = runningInstance();
     if (!inst) {
@@ -536,14 +517,12 @@ async function applyPreserveThinkChange() {
     reloadCurrentModel();
 }
 
-// Host-side buffers are named after the backend that pinned them (Vulkan_Host,
-// CUDA_Host) or after the CPU itself; everything else is a card.
+// Host buffers (Vulkan_Host, CUDA_Host, CPU*) count as RAM.
 function isHostDevice(name) {
     return /^CPU/i.test(name) || /_Host$/i.test(name);
 }
 
-// One box per place the weights and the cache actually landed, cards kept apart
-// and host buffers rolled into a single RAM figure.
+// One box per card, host buffers together as RAM.
 function renderMemDevices(devices) {
     const row = document.getElementById('mem-devices-row');
     if (!row) return;
@@ -587,8 +566,7 @@ function formatMiB(mib) {
     return mib >= 1024 ? `${(mib / 1024).toFixed(2)} GiB` : `${Math.round(mib)} MiB`;
 }
 
-// The context window is per slot, so the KV the engine is asked for is that times
-// the slot count. Spell the total out: it is what the memory bill follows.
+// The context is per slot, so spell out the total KV the engine is asked for.
 function renderParallelHint() {
     const hint = document.getElementById('parallel-hint');
     if (!hint) return;
@@ -647,8 +625,7 @@ async function applyResChange() {
     reloadCurrentModel();
 }
 
-// A reset is every field changing at once, so like any field change it
-// restarts the model it applies to. The server owns the defaults.
+// A reset restarts what it applies to, like any field change.
 async function postReset(query) {
     try {
         const res = await fetch('/api/reset' + query, { method: 'POST' });
@@ -698,8 +675,7 @@ async function pollStatus() {
         if (currentLoadingModel && loaded && loaded.ready) {
             currentLoadingModel = null;
         }
-        // With eviction on, the start we were waiting for can be undone by the
-        // next one; the instance simply is not there any more.
+        // With eviction, the next start can undo the one we waited for.
         if (currentLoadingModel && !loaded && (status.instances || []).length) {
             const anyStarting = (status.instances || []).some(i => !i.ready);
             if (!anyStarting) currentLoadingModel = null;
@@ -751,8 +727,7 @@ function startPolling() {
 function updateStatusDisplay(status) {
     lastStatus = status;
     instances = status.instances || [];
-    // The instance this tab is about. Null means nothing of this kind is up,
-    // whatever else may be running.
+    // The instance this tab is about; null if none of this kind is up.
     const inst = runningInstance();
 
     const multiInput = document.getElementById('multi-input');
@@ -761,8 +736,7 @@ function updateStatusDisplay(status) {
         renderMultiState(multiInput.checked);
     }
 
-    // What the controls describe: the instance in focus, or -- with nothing of
-    // this kind running -- the sticky choice for the next start.
+    // The focused instance's values, or the sticky choice for the next start.
     const shownCtx = inst && inst.ctx ? inst.ctx : status.selected_ctx;
     if (ctxInputPristine && shownCtx) {
         const ctxInput = document.getElementById('ctx-input');
@@ -807,8 +781,7 @@ function updateStatusDisplay(status) {
     }
     renderSdProfileLabels();
 
-    // Mirror the server's remembered choice, except while a load is in flight:
-    // status still carries the old value until the new process is up.
+    // Mirror the server's choice, except while a load is in flight.
     if (preserveInputPristine && !currentLoadingModel) {
         const preserveInput = document.getElementById('preserve-think-input');
         const shownPreserve = inst ? !!inst.preserve_think : !!status.selected_preserve_think;
@@ -851,14 +824,12 @@ function updateStatusDisplay(status) {
 
     paintRunningTab();
 
-    // Models start and stop under the Running tab; redraw its list when the set
-    // changes, not on every poll, so hover and scroll survive.
+    // Redraw the Running list only when the set changes, so hover and scroll survive.
     if (activeSection === RUNNING && runningSignature() !== lastRunningSignature) {
         renderModelList(currentConfig ? currentConfig.models || {} : {});
     }
 
-    // Looking at a tab whose backend is not the running one: the numbers on screen
-    // would belong to someone else, so blank them rather than leave them stale.
+    // On a tab whose model is not up, blank the numbers rather than show someone else's.
     const showsRunningKind = !!inst;
     if (!showsRunningKind) {
         ['stat-gen-speed', 'stat-prompt-speed', 'stat-total-tokens', 'stat-ctx-usage',
@@ -880,8 +851,7 @@ function updateStatusDisplay(status) {
             && currentConfig.kinds
             && currentConfig.kinds[focusedModel] === activeSection;
         indicator.classList.remove('on');
-        // "Stopped" only when there is truly nothing: no instance anywhere and no
-        // row picked here. Otherwise this view is simply not loaded.
+        // "Stopped" only when nothing is up and nothing is picked here.
         statusText.innerText = (instances.length || pickedHere) ? 'Not loaded' : 'Stopped';
         statusText.style.color = 'var(--text-secondary)';
         modelText.innerText = pickedHere ? focusedModel : '-';
@@ -896,9 +866,7 @@ function updateStatusDisplay(status) {
             modelText.innerText = inst.model || 'Unknown';
         }
 
-        // Memory is reported by every llama.cpp-based backend, so it is filled
-        // before the per-kind branches rather than inside the llm one. Guarded by
-        // the same rule as the rest: another tab must not show these numbers.
+        // Memory comes from every llama.cpp-based backend, so it is filled before the per-kind parts.
         if (inst.stats) {
             const memModelEl = document.getElementById('stat-mem-model');
             if (memModelEl) memModelEl.innerText = formatMiB(inst.stats.mem_model);
@@ -931,8 +899,7 @@ function updateStatusDisplay(status) {
             const sdParamsEl = document.getElementById('stat-sd-mem-params');
             if (sdParamsEl) sdParamsEl.innerText = formatMiB(s.mem_model);
 
-            // Only known once a graph has been built, so it stays '-' until the
-            // first image.
+            // Known only after the first image.
             const sdComputeEl = document.getElementById('stat-sd-mem-compute');
             if (sdComputeEl) sdComputeEl.innerText = formatMiB(s.mem_compute);
         } else if (inst.stats && inst.kind === 'tts') {
@@ -983,12 +950,10 @@ function updateStatusDisplay(status) {
             if(totalTokensEl) totalTokensEl.innerText = inst.stats.total_tokens || 0;
         }
 
-        // Decision models serve /v1/systemone and nothing else: clef has no web page
-        // at all, so the button would open a blank engine root.
+        // Decision models have no web page, so no button.
         if (inst.ready && inst.kind !== 'decision') {
             webuiBtn.style.display = 'inline-block';
-            // Straight to the engine's own address: every engine page calls its own
-            // paths absolutely, so none of them survive being served under a prefix.
+            // Straight to the engine's address: engine pages break under a prefix.
             const displayHost = (status.host === '0.0.0.0') ? window.location.hostname : status.host;
             webuiBtn.href = `http://${displayHost}:${inst.port}`;
         } else {
@@ -1031,13 +996,11 @@ function applyDashboardKind(kind) {
     }
     const isSd = kind === 'sd';
     const isTts = kind === 'tts';
-    // Music has no counters of its own yet, but it is not a language model either:
-    // showing the llm block would report someone else's tokens.
+    // Music has no counters yet; the llm block would show someone else's tokens.
     const isMusic = kind === 'music';
     // Recognition has no counters of its own either, and no frames or output size.
     const isStt = kind === 'stt';
-    // Decision models answer in one forward pass and generate no tokens, so the
-    // llm counters would read zero; they do take -c, so the context control stays.
+    // Decision models generate no tokens, but take -c, so the context control stays.
     const isDecision = kind === 'decision';
     const notLlm = isSd || isTts || isStt || isMusic || isDecision;
     const llmStats = document.getElementById('stats-llm');
@@ -1063,9 +1026,7 @@ function applyDashboardKind(kind) {
     if (decStats) decStats.style.display = isDecision ? '' : 'none';
     if (ctxControl) ctxControl.style.display = (notLlm && !isDecision) ? 'none' : '';
     if (parallelControl) parallelControl.style.display = (notLlm && !isDecision) ? 'none' : '';
-    // Every backend takes a device: -dev for llama.cpp, --backend role=dev for
-    // sd, --backend vulkan --device N for audiocpp. Image models get one row per
-    // module instead of a single picker.
+    // One device picker, or one row per module for image models.
     if (devicesControl) devicesControl.style.display = isSd ? 'none' : '';
     if (sdDevicesControl) sdDevicesControl.style.display = isSd ? '' : 'none';
     if (framesControl) framesControl.style.display = isTts ? '' : 'none';
@@ -1158,8 +1119,7 @@ async function copyLogs() {
         }
         const res = await fetch(`/api/logs?model=${encodeURIComponent(owner.model)}`);
         const text = (await res.json()).join('\n');
-        // navigator.clipboard exists only on a secure origin, and the dashboard is
-        // plain http on the LAN, which is exactly where the phone opens it.
+        // navigator.clipboard needs a secure origin, which plain http on the LAN is not.
         if (navigator.clipboard && window.isSecureContext) {
             await navigator.clipboard.writeText(text);
         } else {
@@ -1186,8 +1146,7 @@ async function copyLogs() {
 }
 
 async function clearLogs() {
-    // Wiping another section's log from here would destroy the only record of a
-    // crash the user cannot even see on this tab.
+    // Never wipe another section's log from here.
     const owner = await fetchLogsOwner();
     if (!owner.mine) return;
     try {

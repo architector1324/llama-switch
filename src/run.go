@@ -23,12 +23,7 @@ import (
 	"time"
 )
 
-// --- run ---
-//
-// One command for every kind: what it does with a message depends on what the
-// model is. A language model answers it, an image model draws it, a speech
-// model says it, a music model plays it, a transcription model takes it as the
-// path of a recording, and a decision model as the state its questions are about.
+// --- run: one command for every kind of model ---
 
 type runOptions struct {
 	Server       string
@@ -41,8 +36,7 @@ type runOptions struct {
 	Styled       bool // stdout is a terminal
 	Spinner      bool // stderr is a terminal
 
-	// llm, sd: text piped in, ahead of the prompt as it is. It is read, not
-	// searched for files to attach: only the prompt names those.
+	// llm, sd: piped text, sent ahead of the prompt as it is, without looking for files.
 	Piped string
 
 	Output    string   // where an image or a clip goes
@@ -309,9 +303,7 @@ type runSettings struct {
 	preserve, hires, single bool
 }
 
-// Do what the dashboard does when a field changes: start the model with the
-// new value. The fields not given keep the running instance's values, and a
-// model already running exactly so is left alone.
+// Like a field change on the dashboard: restart with what was given, keep the rest.
 func applySettings(ctx context.Context, opts runOptions, quant string, s runSettings) error {
 	if s.set["single"] {
 		body, _ := json.Marshal(map[string]bool{"multi": !s.single})
@@ -462,8 +454,7 @@ type chatMessage struct {
 	Content any    `json:"content"` // the text, or parts: files and the text
 }
 
-// The conversation so far goes with every message, after the system prompt,
-// which /clear keeps.
+// Every message goes with the conversation so far, after the system prompt /clear keeps.
 func chatTask(opts runOptions, out, errOut io.Writer) runTask {
 	var history []chatMessage
 	return runTask{
@@ -496,9 +487,7 @@ func chatTask(opts runOptions, out, errOut io.Writer) runTask {
 	}
 }
 
-// A message as the chat API takes it. The files it names go as parts of their
-// own, ahead of the text, where Gemma and Qwen want them; whether the model
-// takes them is for the engine to say.
+// A message as the chat API takes it: the files it names first, then the text.
 func userContent(ctx context.Context, opts runOptions, typed string, out, errOut io.Writer) (any, error) {
 	prompt, paths, _ := extractFiles(typed, false, "image", "audio", "video")
 	text := joinInput(opts.Piped, prompt)
@@ -520,9 +509,7 @@ func userContent(ctx context.Context, opts runOptions, typed string, out, errOut
 	return parts, nil
 }
 
-// A file as llama-server takes it: an image or a video as a data URL, audio
-// as base64 with its format. WAV, MP3 and FLAC it decodes itself; anything
-// else goes through ffmpeg into WAV first.
+// A file as llama-server takes it; audio other than WAV, MP3 or FLAC goes through ffmpeg.
 func mediaPart(ctx context.Context, path string) (map[string]any, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -674,9 +661,7 @@ func readMessage(br *bufio.Reader, out io.Writer) (string, error) {
 
 // --- Talking to the server ---
 
-// The server gives up on a request after a minute of loading, not on the
-// model: it keeps loading, and asking again waits for the same load. So a
-// big model is simply waited for.
+// A load longer than the server's minute is waited out by asking again.
 func post(ctx context.Context, server, path, contentType string, body []byte) (*http.Response, error) {
 	for {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, server+path, bytes.NewReader(body))
@@ -721,8 +706,7 @@ func runJSON(ctx context.Context, opts runOptions, errOut io.Writer, path string
 	return nil
 }
 
-// What the spinner says while the server works: that the model is loading,
-// or how far an image has got.
+// What the spinner says: the model loading, or the image's step.
 func progress(opts runOptions) func() string {
 	if opts.ModelKey == "" {
 		return nil
@@ -752,8 +736,7 @@ func progress(opts runOptions) func() string {
 
 // --- Chat ---
 
-// Send the conversation and print the answer as it streams. The text it
-// returns is the answer alone, reasoning left out, as the next turn needs it.
+// Stream the answer; returns it without the reasoning, for the next turn.
 func chat(ctx context.Context, opts runOptions, messages []chatMessage, out, errOut io.Writer) (string, error) {
 	body, _ := json.Marshal(map[string]any{
 		"model": opts.Model, "messages": messages, "stream": true,
@@ -866,10 +849,7 @@ func statLine(w io.Writer, label, format string, a ...any) {
 
 func roundDuration(d time.Duration) time.Duration { return d.Round(100 * time.Microsecond) }
 
-// The summary ollama's --verbose prints, from the engine's own figures where it
-// gives them. Load duration is whatever the request spent before the engine
-// took the prompt: the load itself when the model was not up, next to nothing
-// when it was.
+// The --verbose summary, ollama style, from the engine's own figures.
 func printStats(w io.Writer, total time.Duration, usage *chatUsage, t *chatTimings) {
 	statLine(w, "total duration", "%v", roundDuration(total))
 	switch {
@@ -896,8 +876,7 @@ func printStats(w io.Writer, total time.Duration, usage *chatUsage, t *chatTimin
 	}
 }
 
-// Writes the streamed answer: reasoning dimmed between two markers, the way
-// ollama shows it, then the answer itself.
+// Prints the stream: reasoning dimmed between markers, as ollama does, then the answer.
 type answerPrinter struct {
 	out          io.Writer
 	showThinking bool
@@ -967,8 +946,7 @@ func (p *answerPrinter) finish() {
 	}
 }
 
-// Spins on stderr until the first result, so a model loading is not mistaken
-// for a hang. label, polled on the side, says what is being waited for.
+// Spins on stderr until the first result; label says what is awaited.
 type spinner struct {
 	once    sync.Once
 	done    chan struct{}

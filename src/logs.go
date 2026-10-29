@@ -54,8 +54,7 @@ var (
 	// prompt eval time =       4.67 ms /    11 tokens (    0.42 ms per token,  2355.46 tokens per second)
 	rePrompt = regexp.MustCompile(`prompt eval time\s*=\s*[\d\.]+\s*ms\s*/\s*\d+\s*tokens\s*\(\s*[\d\.]+\s*ms per token,\s*([\d\.]+)\s*tokens per second\)`)
 
-	// Same line as above minus the "prompt " prefix. RE2 has no lookbehind, so
-	// matchEval skips the matches that sit right after "prompt ".
+	// The eval line minus "prompt "; RE2 has no lookbehind, so matchEval skips the prompt matches.
 	reEval = regexp.MustCompile(`eval time\s*=\s*[\d\.]+\s*ms\s*/\s*(\d+)\s*tokens\s*\(\s*[\d\.]+\s*ms per token,\s*([\d\.]+)\s*tokens per second\)`)
 
 	// slot      release: id  3 | task 10 | stop processing: n_tokens = 73, truncated = 0
@@ -76,47 +75,28 @@ var (
 	// "[Perf] Total 36762.3 ms (2048 frames, 16.67 ms/frame AR, audio 163.84 s, RTF 0.224)"
 	reTtsDone = regexp.MustCompile(`\[Perf\] Total\s+([\d\.]+)\s*ms\s*\((\d+)\s*frames.*?audio\s+([\d\.]+)\s*s,\s*RTF\s+([\d\.]+)\)`)
 
-	// Decision models print no print_timing at all, only the slot lifecycle. The
-	// request's cost is the gap between these two lines; llama.cpp's own log clock
-	// is used rather than ours, so pipe latency does not creep into the number.
-	//   1.17.598.882 I slot launch_slot_: id  0 | task 0 | processing task
-	//   1.18.108.321 I slot      release: id  0 | task 0 | stop processing: n_tokens = 449
+	// Decision models print no timings: the time is the gap between slot launch and release.
 	reDecStart = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)\.(\d+).*launch_slot_.*processing task`)
 	reDecDone  = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)\.(\d+).*release:.*stop processing: n_tokens = (\d+)`)
 
-	// Memory, from llama.cpp's own lines. Backend-agnostic: the device name is
-	// whatever the backend calls itself, Vulkan0 or CUDA0 or CPU_Mapped.
-	//   load_tensors:      Vulkan0 model buffer size =   610.56 MiB
+	// Memory from llama.cpp's lines, e.g. "Vulkan0 model buffer size = 610.56 MiB".
 	reMemModel = regexp.MustCompile(`(\S+) model buffer size\s*=\s*([\d\.]+)\s*MiB`)
 
-	// Only buffers that were really allocated. The "llama_kv_cache: size =" line
-	// looks tempting because it needs no device, but a draft model prints it for a
-	// cache it does not own -- it shares the target's ("sharing with layer N").
-	//   llama_kv_cache:    Vulkan0 KV buffer size =    51.00 MiB
+	// KV buffers really allocated; "llama_kv_cache: size =" also counts a draft's shared cache.
 	reMemKV = regexp.MustCompile(`(\S+) KV buffer size\s*=\s*([\d\.]+)\s*MiB`)
 
-	// The vision tower is loaded by clip, which names its device on one line and
-	// never prints a buffer size; mtmd prints the size once, earlier, with no device.
-	//   srv load_model: [mtmd] estimated worst-case memory usage of mmproj is 1817.01 MiB
-	//   clip_ctx: CLIP using Vulkan0 backend        (twice: vision and audio, one copy)
+	// mmproj size comes from mtmd's estimate; clip names the device on another line.
 	reMemMmproj = regexp.MustCompile(`memory usage of mmproj is\s*([\d\.]+)\s*MiB`)
 	reClipDev   = regexp.MustCompile(`CLIP using (\S+) backend`)
 
-	// sd.cpp keeps its own books. The fit plan says which card each component
-	// landed on, and a separate line gives what each one really weighed -- the plan
-	// is only an estimate (it budgeted 319 MiB for a VAE that came out 160).
-	//   backend_fit.cpp - DiT params 6272 MiB, compute reserve 2048 MiB -> compute Vulkan1, params Vulkan1
+	// sd.cpp's fit plan says which card each component landed on.
 	reSdFit = regexp.MustCompile(`(\S+)\s+params\s+[\d\.]+\s*MiB,\s*compute reserve.*?params (\S+)`)
 
-	//   diffusion_engine.cpp - total params memory size = 10509.14MB (VRAM 10509.14MB, RAM 0.00MB):
-	//       text_encoders 4076.43MB(VRAM), diffusion_model 6272.71MB(VRAM), vae 160.00MB(VRAM), ...
+	// What sd.cpp's weights really took, per component.
 	reSdParams = regexp.MustCompile(`total params memory size\s*=\s*([\d\.]+)MB`)
 	reSdPart   = regexp.MustCompile(`(\w+) ([\d\.]+)MB\((?:VRAM|RAM)\)`)
 
-	// Each component reports its own peak and re-reports it as it grows, so the
-	// figure is kept per component and summed per device -- replacing by device
-	// alone let the vae overwrite the text encoder.
-	//   ggml_runner.cpp - z_image compute buffer size: 690.12 MB(VRAM) on Vulkan1 (peak across 1 segment)
+	// Compute buffers per component, re-reported as they grow, summed per device.
 	reSdCompute = regexp.MustCompile(`(\S+) compute buffer size:\s*([\d\.]+)\s*MB\((?:VRAM|RAM)\) on (\S+)`)
 )
 
@@ -179,9 +159,7 @@ func logReader(r io.ReadCloser, inst *Instance) {
 	}
 
 	eachOutputLine(r, func(line string) {
-		// At trace level, which the memory panel needs, llama.cpp reports an
-		// idle server once a second. Nothing reads it, and it buried the
-		// request lines in the panel, so it is dropped before it is stored.
+		// The trace level prints "all slots are idle" every second; dropped before it is stored.
 		if line == "" || strings.Contains(line, idleLine) {
 			return
 		}
@@ -365,9 +343,7 @@ func logReader(r io.ReadCloser, inst *Instance) {
 	})
 }
 
-// Never through a proxy: the backend is our own child on loopback. With
-// http_proxy set and no_proxy unset -- which is what the service inherits --
-// every hop went to privoxy and came back 502.
+// Never through http_proxy: engines are our own children on loopback.
 func directTransport() *http.Transport {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.Proxy = nil
@@ -379,12 +355,7 @@ func num(m map[string]any, key string) float64 {
 	return v
 }
 
-// Live pp/tg while a request is in flight.
-//
-// llama-server prints its timings only when a request finishes, so the dashboard
-// sat on the previous request's numbers until the next one ended. /slots is on by
-// default and counts tokens as they come, so the rate is a difference over time.
-// The log parser still overwrites both with the exact figures at the end.
+// Live pp/tg from /slots while a request runs; the log's exact figures replace them at the end.
 func slotsPoller(inst *Instance) {
 	url := fmt.Sprintf("http://127.0.0.1:%d/slots", inst.Port)
 	client := &http.Client{Timeout: time.Second, Transport: directTransport()}
@@ -411,10 +382,7 @@ func slotsPoller(inst *Instance) {
 			continue
 		}
 
-		// Context fill, live. The log only says it once the request is released, and
-		// n_ctx is what the engine actually ended up with rather than what we asked for.
-		// The fullest slot, not the sum: every slot has its own window of this size,
-		// so the gauge reads against one of them. Identical while there is one slot.
+		// Live context fill of the fullest slot, against the n_ctx the engine really got.
 		ctxUsed, ctxLimit := 0.0, 0.0
 		busySlots, prefill := 0, 0
 		dec, pp := 0.0, 0.0
@@ -449,12 +417,9 @@ func slotsPoller(inst *Instance) {
 		})
 
 		now := time.Now()
-		// Both ends of the window must fall inside the request. Otherwise the first
-		// window also covers the idle time before it and reports far too little: a
-		// prefill that takes a tenth of a second looked like a whole second of it.
+		// Only windows inside a request, or idle time drags the rate down.
 		if busy && prevBusy && havePrev {
-			// A counter that dropped means a new request started: rebase, do not
-			// report a negative rate.
+			// A counter that dropped means a new request: rebase, no negative rate.
 			if dt := now.Sub(prevT).Seconds(); dt > 0 {
 				inst.update(func(s *Stats) {
 					if dec > prevDec {

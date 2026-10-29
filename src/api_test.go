@@ -70,8 +70,7 @@ func testConfig() string {
 	return r.Replace(testConfigTemplate)
 }
 
-// Everything back to how a fresh server starts, minus the device probe: the
-// fake cards stand in for llama-server --list-devices.
+// Back to a fresh server, minus the device probe.
 func resetState() {
 	opMu.Lock()
 	stopAll()
@@ -128,8 +127,7 @@ func newHarness(t *testing.T) *harness {
 	return h
 }
 
-// body goes as JSON unless it is already []byte or an io.Reader; header is
-// name, value pairs.
+// body goes as JSON unless []byte or io.Reader; header is name, value pairs.
 func (h *harness) request(method, path string, body any, header ...string) *http.Response {
 	h.t.Helper()
 	var rd io.Reader
@@ -632,8 +630,7 @@ func TestResetRestoresDefaultsAndRestarts(t *testing.T) {
 		}
 	}
 
-	// Reset All restarts everything, and must not let the first restart evict
-	// the rest even with Multi-model off.
+	// Reset All must not let the first restart evict the rest, even with Multi-model off.
 	h.ok("POST", "/api/multi", map[string]any{"multi": false})
 	out = h.ok("POST", "/api/reset", nil)
 	got := out["restarted"].([]any)

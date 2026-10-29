@@ -282,8 +282,7 @@ body {
     border-color: rgba(16, 185, 129, 0.2);
 }
 
-/* Several models can run at once; this is the one the dashboard reports on.
-   Clicking another running row moves the dashboard to it. */
+/* The running model the dashboard reports on. */
 .model-item.active.focused {
     background-color: rgba(16, 185, 129, 0.16);
     border-color: var(--success);
@@ -459,9 +458,7 @@ body {
     padding-right: 24px;
 }
 
-/* Halves of the stats column, so the second column starts at the same x in every
-   row. Sized to content the boxes drifted: a box is as wide as its longest line, and
-   space-between pinned the right edge, so a short label pushed its value sideways. */
+/* Fixed halves, so the second column lines up in every row. */
 .stat-row {
     display: flex;
     gap: 16px;
@@ -567,9 +564,7 @@ body {
     color: var(--primary);
 }
 
-/* Sits under an input to spell out what the chosen number works out to. Empty
-   most of the time, so it must not reserve height -- that read as a stray gap
-   between control groups. */
+/* Empty most of the time, so it reserves no height. */
 .control-hint {
     display: block;
     font-family: var(--font-mono);
@@ -600,8 +595,7 @@ body {
     color: var(--text-muted);
 }
 
-/* Same footing as Output Size: sized to content, not stretched across the
-   panel. A floor keeps the three rows lined up when one of them says Profile. */
+/* Sized to content like Output Size, with a floor to keep rows aligned. */
 .sd-device-row .res-select {
     flex: 0 1 auto;
     width: fit-content;
@@ -787,8 +781,7 @@ input[type="number"]:focus {
     }
 
     .dashboard-grid {
-        /* It is a flex row, so grid-template-columns here never did anything and the
-           two columns stayed side by side on a phone. */
+        /* A flex row, so this stacks the columns on a phone. */
         flex-direction: column;
         padding: 16px;
     }
@@ -801,8 +794,7 @@ input[type="number"]:focus {
     }
 
     .logs-panel {
-        /* Without this the desktop flex: 1 wins over the height and the panel grows
-           with every log line instead of scrolling inside itself. */
+        /* Or flex: 1 wins and the panel grows with the log instead of scrolling. */
         flex: none;
         height: 60vh;
         min-height: 300px;
@@ -816,12 +808,10 @@ input[type="number"]:focus {
 
 .section-tabs {
     display: flex;
-    /* Five sections no longer fit on one row at the panel's width; without this the
-       last tab hangs past the panel border instead of moving to a second row. */
+    /* Tabs wrap to a second row instead of overflowing the panel. */
     flex-wrap: wrap;
     gap: 4px;
-    /* Same 24px gutter as the panel header and the list header below. No border of
-       its own: the list header already draws one, and two rules this close crowd. */
+    /* Same 24px gutter as the headers; the list header draws the border. */
     padding: 0 24px 18px;
 }
 
@@ -847,8 +837,7 @@ input[type="number"]:focus {
     color: var(--text-primary);
 }
 
-/* Running is not a config section but a view over everything that is up,
-   so it is set apart in the success colour the running rows already use. */
+/* Running is a view, not a section: set apart in the success colour. */
 .section-tab.running-tab {
     color: var(--success);
 }
@@ -862,8 +851,7 @@ input[type="number"]:focus {
     color: var(--success);
 }
 
-/* Nothing loaded: the same tab in the danger colour, so an empty board is
-   visible from any section. */
+/* Nothing loaded: danger colour, visible from any section. */
 .section-tab.running-tab.idle,
 .section-tab.running-tab.idle:hover {
     color: var(--danger);

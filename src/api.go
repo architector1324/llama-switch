@@ -73,7 +73,7 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{
-		// Flat map kept for older clients; "sections" is the grouped view.
+		// Every model by id; "sections" groups them by kind.
 		"models":           cfg.Models,
 		"sections":         grouped,
 		"kinds":            kinds,
@@ -147,10 +147,6 @@ func handleV1Models(w http.ResponseWriter, r *http.Request) {
 		if kind == "" {
 			kind = "llm"
 		}
-		quants := info.Keys
-		if isLegacy(info) {
-			quants = []string{""}
-		}
 
 		// A context window is an llm notion: sd and tts have none.
 		nCtx := 0
@@ -158,11 +154,8 @@ func handleV1Models(w http.ResponseWriter, r *http.Request) {
 			nCtx = effectiveCtx
 		}
 
-		for i, quant := range quants {
+		for i, quant := range info.Keys {
 			cmd := info.Values[quant]
-			if isLegacy(info) {
-				cmd = info.Values["cmd"]
-			}
 			// The first-listed quant is the one published under the bare model id.
 			id := modelKey
 			if i > 0 {

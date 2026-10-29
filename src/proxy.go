@@ -30,9 +30,6 @@ func lookupModel(requested, kind string) (string, string, bool) {
 	}
 	for _, key := range sec.Keys {
 		info := sec.Values[key]
-		if isLegacy(info) {
-			continue // Old format doesn't support suffixes
-		}
 		def := defaultQuant(info)
 		for _, quant := range info.Keys {
 			if quant == def {

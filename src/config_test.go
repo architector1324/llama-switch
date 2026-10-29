@@ -32,7 +32,7 @@ llm:
     q8: cmd b q8
     q4: cmd b q4
   a:
-    cmd: cmd a
+    q1: cmd a
 sd:
 `)
 	llm := cfg.Sections["llm"]
@@ -42,9 +42,6 @@ sd:
 	b := llm.Values["b"]
 	if !reflect.DeepEqual(b.Keys, []string{"q8", "q4"}) || defaultQuant(b) != "q8" {
 		t.Errorf("quants %v, default %q: the first listed is the default", b.Keys, defaultQuant(b))
-	}
-	if a := llm.Values["a"]; !isLegacy(a) || defaultQuant(a) != "" || a.Values["cmd"] != "cmd a" {
-		t.Errorf("legacy model %+v", a)
 	}
 	for _, name := range sections {
 		if cfg.Sections[name] == nil {
@@ -71,17 +68,6 @@ llm:
 	}
 	if _, ok := cfg.Sections["decision"].Get("x"); !ok {
 		t.Error("the grouped view lost the duplicate")
-	}
-}
-
-func TestLoadConfigReadsTheLegacyModelsSection(t *testing.T) {
-	cfg := mustLoad(t, "models:\n  m:\n    q: c\n")
-	if cfg.Kinds["m"] != "llm" {
-		t.Errorf("models: not read as llm: %v", cfg.Kinds)
-	}
-	cfg = mustLoad(t, "llm:\n  a:\n    q: c\nmodels:\n  m:\n    q: c\n")
-	if _, ok := cfg.Kinds["m"]; ok || cfg.Kinds["a"] != "llm" {
-		t.Errorf("an explicit llm: section must win over models: %v", cfg.Kinds)
 	}
 }
 

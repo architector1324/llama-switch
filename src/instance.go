@@ -63,7 +63,7 @@ const maxLogLines = 2000
 // One launched backend: process, port, counters, log; fields above mu never change after start.
 type Instance struct {
 	ModelKey      string
-	Quant         string // "" for the old single-cmd format
+	Quant         string
 	Kind          string
 	Port          int
 	Ctx           int
@@ -437,15 +437,6 @@ func expandProfile(tmpl string, v profileValues) string {
 	cmd = replaceSubmatchFunc(reDevices, cmd, func(g []string) string {
 		return deviceFlags(v.Devices, v.Kind, g[1])
 	})
-	// Bare forms, for configs written without the braces.
-	cmd = strings.ReplaceAll(cmd, "$PORT", port)
-	cmd = strings.ReplaceAll(cmd, "$CTX", ctxTotal)
-	cmd = strings.ReplaceAll(cmd, "$FRAMES", frames)
-	cmd = strings.ReplaceAll(cmd, "$WIDTH", v.Width)
-	cmd = strings.ReplaceAll(cmd, "$HEIGHT", v.Height)
-	cmd = strings.ReplaceAll(cmd, "$HOST", v.Host)
-	cmd = strings.ReplaceAll(cmd, "$PRESERVE_THINK", preserveFlag)
-	cmd = strings.ReplaceAll(cmd, "$PARALLEL", parallel)
 	return cmd
 }
 
@@ -473,22 +464,14 @@ func startModelServer(req StartRequest, replaceOnly bool) (StartResult, error) {
 		kind = "llm"
 	}
 
-	var cmdTemplate, actualQuant string
-	if isLegacy(modelConf) {
-		// Old single-cmd format, no quants
-		cmdTemplate = modelConf.Values["cmd"]
-	} else {
-		quantization := orStr(req.Quantization, "")
-		if quantization == "" {
-			quantization = defaultQuant(modelConf)
-		}
-		tmpl, ok := modelConf.Get(quantization)
-		if !ok {
-			return StartResult{}, badValue(fmt.Sprintf(
-				"Quantization %s not found for model %s", quantization, modelKey))
-		}
-		cmdTemplate = tmpl
-		actualQuant = quantization
+	actualQuant := orStr(req.Quantization, "")
+	if actualQuant == "" {
+		actualQuant = defaultQuant(modelConf)
+	}
+	cmdTemplate, ok := modelConf.Get(actualQuant)
+	if !ok {
+		return StartResult{}, badValue(fmt.Sprintf(
+			"Quantization %s not found for model %s", actualQuant, modelKey))
 	}
 
 	state.mu.Lock()

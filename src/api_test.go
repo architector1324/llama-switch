@@ -32,9 +32,9 @@ const testConfigTemplate = `
 llm:
   zeta:
     q4: {llm} --port ${PORT} --host ${HOST} ${DEVICES} -c ${CTX} --parallel ${PARALLEL} ${PRESERVE_THINK} --mmproj x
-    q8: {llm} --port $PORT --host $HOST -c $CTX
-  legacy:
-    cmd: {llm} --port ${PORT} --host ${HOST}
+    q8: {llm} --port ${PORT} --host ${HOST} -c ${CTX}
+  eta:
+    q1: {llm} --port ${PORT} --host ${HOST}
   slow:
     q1: {llm} --port ${PORT} --host ${HOST} --delay-ms 300
   broken:
@@ -325,7 +325,7 @@ func TestConfigEndpointKeepsConfigOrder(t *testing.T) {
 
 	var grouped map[string]json.RawMessage
 	json.Unmarshal(top["sections"], &grouped)
-	if got, want := objectKeys(t, grouped["llm"]), []string{"zeta", "legacy", "slow", "broken"}; !reflect.DeepEqual(got, want) {
+	if got, want := objectKeys(t, grouped["llm"]), []string{"zeta", "eta", "slow", "broken"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("llm model order %v, want %v", got, want)
 	}
 	var llm map[string]json.RawMessage
@@ -357,14 +357,14 @@ func TestV1ModelsListsEverySection(t *testing.T) {
 		byID[entry["id"].(string)] = entry
 	}
 	for id, kind := range map[string]string{
-		"zeta": "llm", "zeta-q8": "llm", "legacy": "llm", "img": "sd", "voice": "tts",
+		"zeta": "llm", "zeta-q8": "llm", "eta": "llm", "img": "sd", "voice": "tts",
 		"ears": "stt", "song": "music", "song-sfx": "music", "clef": "decision",
 	} {
 		if byID[id] == nil || byID[id]["type"] != kind {
 			t.Errorf("%s: %v, want type %s", id, byID[id], kind)
 		}
 	}
-	for _, missing := range []string{"zeta-q4", "legacy-cmd", "song-q8"} {
+	for _, missing := range []string{"zeta-q4", "eta-q1", "song-q8"} {
 		if byID[missing] != nil {
 			t.Errorf("%s listed: the default quant goes under the bare id only", missing)
 		}
@@ -695,8 +695,8 @@ func TestChatAutoloadsAndStripsTheASRHeader(t *testing.T) {
 		t.Errorf("suffixed id loaded %v", q)
 	}
 	h.ok("POST", "/api/multi", map[string]any{"multi": false})
-	h.ok("POST", "/v1/responses", map[string]any{"model": "legacy"})
-	if got := h.running(); !reflect.DeepEqual(got, []string{"legacy"}) {
+	h.ok("POST", "/v1/responses", map[string]any{"model": "eta"})
+	if got := h.running(); !reflect.DeepEqual(got, []string{"eta"}) {
 		t.Errorf("running %v: with Multi-model off a request evicts the rest", got)
 	}
 }

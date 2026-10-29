@@ -237,12 +237,8 @@ func printModels(server, kind string, w io.Writer) error {
 		if kind != "" && m.Kind != kind {
 			continue
 		}
-		quant := m.Details.QuantizationLevel
-		if quant == "" {
-			quant = "-"
-		}
 		state := up[instanceKey(m.Details.ParentModel, m.Details.QuantizationLevel)]
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", m.Name, m.Kind, quant, state)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", m.Name, m.Kind, m.Details.QuantizationLevel, state)
 	}
 	return tw.Flush()
 }

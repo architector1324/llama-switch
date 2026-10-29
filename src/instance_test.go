@@ -24,8 +24,6 @@ func TestExpandProfile(t *testing.T) {
 		{"s --host ${HOST} --port ${PORT} -c ${CTX} --parallel ${PARALLEL} ${PRESERVE_THINK}", base,
 			"s --host 0.0.0.0 --port 4242 -c 8192 --parallel 2 --no-reasoning-preserve"},
 		{"s ${PRESERVE_THINK}", with(func(v *profileValues) { v.PreserveThink = true }), "s --reasoning-preserve"},
-		{"s $HOST $PORT $CTX $PARALLEL $FRAMES $WIDTH $HEIGHT $PRESERVE_THINK", base,
-			"s 0.0.0.0 4242 8192 2 2048 832 1216 --no-reasoning-preserve"},
 		{"s -W ${WIDTH} -H ${HEIGHT} --max-new ${FRAMES}", base, "s -W 832 -H 1216 --max-new 2048"},
 
 		// Hires: on puts the profile's own flags in, off removes the placeholder.
@@ -60,8 +58,8 @@ func TestLookupAndResolveModel(t *testing.T) {
 		{"zeta", "llm", "zeta", "q4", true},
 		{"zeta-q8", "llm", "zeta", "q8", true},
 		{"zeta-q4", "llm", "", "", false}, // the default has the bare id only
-		{"legacy", "llm", "legacy", "", true},
-		{"legacy-cmd", "llm", "", "", false},
+		{"eta", "llm", "eta", "q1", true},
+		{"eta-q1", "llm", "", "", false},
 		{"song-sfx", "music", "song", "sfx", true},
 		{"song-sfx", "llm", "", "", false},
 		{"ears", "stt", "ears", "f16", true},

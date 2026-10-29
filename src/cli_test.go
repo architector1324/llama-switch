@@ -393,7 +393,7 @@ func TestListAndPs(t *testing.T) {
 	}
 	list := rows(buf.String())
 	for name, want := range map[string]string{
-		"zeta": "llm q4", "zeta-q8": "llm q8 idle", "legacy": "llm -",
+		"zeta": "llm q4", "zeta-q8": "llm q8 idle", "eta": "llm q1",
 		"img": "sd q8_0 idle", "song-sfx": "music sfx", "ears": "stt f16",
 	} {
 		if got := strings.Join(list[name], " "); got != want {

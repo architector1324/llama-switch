@@ -332,14 +332,7 @@ function renderModelList(models) {
         return;
     }
 
-    // Older servers send no "sections", so fall back to one unlabelled group.
-    const sections = currentConfig.sections;
-    if (!sections) {
-        renderModelGroup(list, models, Object.keys(models).sort(), null);
-        return;
-    }
-
-    const group = sections[activeSection] || {};
+    const group = currentConfig.sections[activeSection] || {};
     const keys = Object.keys(group).sort();
     if (keys.length === 0) {
         list.innerHTML = '<div class="loading">No models in this section</div>';

@@ -102,19 +102,14 @@ func (m OrderedMap[V]) MarshalJSON() ([]byte, error) {
 	return b.Bytes(), nil
 }
 
-// One model's command lines by quant, or a single "cmd" in the old format.
+// One model's command lines by quant.
 type Profiles = OrderedMap[string]
 
 type Section = OrderedMap[Profiles]
 
-func isLegacy(p Profiles) bool {
-	_, ok := p.Values["cmd"]
-	return ok
-}
-
-// First quant listed in the config, or "" for the old single-cmd format.
+// First quant listed in the config.
 func defaultQuant(p Profiles) string {
-	if isLegacy(p) || len(p.Keys) == 0 {
+	if len(p.Keys) == 0 {
 		return ""
 	}
 	return p.Keys[0]
@@ -162,18 +157,6 @@ func loadConfig(path string) (*Config, error) {
 			return nil, err
 		}
 		cfg.Sections[name] = sec
-	}
-
-	// Configs written before sections put everything under "models".
-	if len(cfg.Sections["llm"].Keys) == 0 {
-		legacy, err := decode("models")
-		if err != nil {
-			return nil, err
-		}
-		if len(legacy.Keys) > 0 {
-			cfg.Sections["llm"] = legacy
-			fmt.Println("[Config] legacy 'models:' section loaded as 'llm'")
-		}
 	}
 
 	for _, name := range sections {

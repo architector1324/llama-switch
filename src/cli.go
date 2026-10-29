@@ -253,19 +253,28 @@ func printModels(server, kind string, w io.Writer) error {
 	return tw.Flush()
 }
 
+// The names instances go by, keyed by instanceKey: the ones run and the API
+// take, not the internal label.
+func instanceNames(server string) (map[string]string, error) {
+	models, err := fetchModels(server)
+	if err != nil {
+		return nil, err
+	}
+	names := map[string]string{}
+	for _, m := range models {
+		names[instanceKey(m.Details.ParentModel, m.Details.QuantizationLevel)] = m.Name
+	}
+	return names, nil
+}
+
 func printRunning(server string, w io.Writer) error {
 	instances, err := fetchInstances(server)
 	if err != nil {
 		return err
 	}
-	// Named the way run and the API take them, not by the internal label.
-	models, err := fetchModels(server)
+	names, err := instanceNames(server)
 	if err != nil {
 		return err
-	}
-	names := map[string]string{}
-	for _, m := range models {
-		names[instanceKey(m.Details.ParentModel, m.Details.QuantizationLevel)] = m.Name
 	}
 
 	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
@@ -484,25 +493,41 @@ func stopCommand(args []string) {
 // Every name is checked before anything stops, so a typo in the list does not
 // leave half of it unloaded.
 func stopModels(server string, names []string, all bool, out io.Writer) error {
-	stop := func(query string) (int, error) {
+	stop := func(query string) ([]runningInstance, error) {
 		resp, err := post(context.Background(), server, "/api/stop"+query, "application/json", nil)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		defer resp.Body.Close()
 		var res struct {
-			Stopped int `json:"stopped"`
+			Models []runningInstance `json:"models"`
 		}
 		err = json.NewDecoder(resp.Body).Decode(&res)
-		return res.Stopped, err
+		return res.Models, err
 	}
 
+	// One request stops them all, so nothing started meanwhile is missed; the
+	// reply says which they were.
 	if all {
-		n, err := stop("")
+		stopped, err := stop("")
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "Stopped %d model(s)\n", n)
+		if len(stopped) == 0 {
+			fmt.Fprintln(out, "Nothing was running")
+			return nil
+		}
+		names, err := instanceNames(server)
+		if err != nil {
+			return err
+		}
+		for _, i := range stopped {
+			name := names[instanceKey(i.Model, i.Quantization)]
+			if name == "" {
+				name = i.Label
+			}
+			fmt.Fprintf(out, "Stopped %s\n", name)
+		}
 		return nil
 	}
 

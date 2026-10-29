@@ -272,13 +272,9 @@ func runningNames(server string, named []string) []string {
 	if err != nil {
 		return nil
 	}
-	models, err := fetchModels(server)
+	names, err := instanceNames(server)
 	if err != nil {
 		return nil
-	}
-	names := map[string]string{}
-	for _, m := range models {
-		names[instanceKey(m.Details.ParentModel, m.Details.QuantizationLevel)] = m.Name
 	}
 	var out []string
 	for _, i := range instances {

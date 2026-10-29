@@ -361,16 +361,23 @@ func handleLogsClear(w http.ResponseWriter, r *http.Request) {
 func handleStop(w http.ResponseWriter, r *http.Request) {
 	model := r.URL.Query().Get("model")
 	opMu.Lock()
-	stopped := 0
+	var stopped []*Instance
 	if model != "" {
-		if stopInstance(model) {
-			stopped = 1
+		if inst := stopInstance(model); inst != nil {
+			stopped = append(stopped, inst)
 		}
 	} else {
 		stopped = stopAll()
 	}
 	opMu.Unlock()
-	writeJSON(w, http.StatusOK, map[string]any{"status": "stopped", "stopped": stopped})
+	// Which ones, so that stopping them all can say what it stopped.
+	models := []map[string]any{}
+	for _, inst := range stopped {
+		models = append(models, map[string]any{
+			"model": inst.ModelKey, "quantization": nullable(inst.Quant), "kind": inst.Kind, "label": inst.label(),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "stopped", "stopped": len(stopped), "models": models})
 }
 
 // One section's remembered choices back to the defaults. Caller holds state.mu.

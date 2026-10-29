@@ -315,13 +315,13 @@ func terminate(inst *Instance) {
 	}
 }
 
-// Stop one instance. Caller holds opMu.
-func stopInstance(modelKey string) bool {
+// Stop one instance; the one stopped, nil when none was up. Caller holds opMu.
+func stopInstance(modelKey string) *Instance {
 	state.mu.Lock()
 	inst := state.remove(modelKey)
 	state.mu.Unlock()
 	if inst == nil {
-		return false
+		return nil
 	}
 	fmt.Printf("[Service] Stopping %s...\n", inst.label())
 	terminate(inst)
@@ -329,18 +329,19 @@ func stopInstance(modelKey string) bool {
 	inst.ready = false
 	inst.mu.Unlock()
 	fmt.Printf("[Service] %s stopped.\n", inst.label())
-	return true
+	return inst
 }
 
-// Stop every instance. Caller holds opMu.
-func stopAll() int {
+// Stop every instance; the ones stopped, in the order they started. Caller
+// holds opMu.
+func stopAll() []*Instance {
 	state.mu.Lock()
 	keys := append([]string{}, state.order...)
 	state.mu.Unlock()
-	stopped := 0
+	var stopped []*Instance
 	for _, k := range keys {
-		if stopInstance(k) {
-			stopped++
+		if inst := stopInstance(k); inst != nil {
+			stopped = append(stopped, inst)
 		}
 	}
 	return stopped

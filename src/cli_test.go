@@ -463,8 +463,14 @@ func TestStop(t *testing.T) {
 	if err := stopModels(h.url, nil, true, &out); err != nil {
 		t.Fatal(err)
 	}
-	if got := h.running(); len(got) != 0 || out.String() != "Stopped 2 model(s)\n" {
+	// Named as ps names them, in the order they started.
+	if got := h.running(); len(got) != 0 || out.String() != "Stopped voice\nStopped img\n" {
 		t.Errorf("--all: running %v, printed %q", got, out.String())
+	}
+
+	out.Reset()
+	if err := stopModels(h.url, nil, true, &out); err != nil || out.String() != "Nothing was running\n" {
+		t.Errorf("--all with nothing up: %v, printed %q", err, out.String())
 	}
 }
 

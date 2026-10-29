@@ -529,7 +529,8 @@ func TestEvictionFollowsMultiModel(t *testing.T) {
 		t.Errorf("multi off: %v, want only the last start", got)
 	}
 
-	if out := h.ok("POST", "/api/stop", nil); out["stopped"] != 1.0 {
+	out := h.ok("POST", "/api/stop", nil)
+	if models, _ := out["models"].([]any); out["stopped"] != 1.0 || len(models) != 1 || models[0].(map[string]any)["model"] != "voice" {
 		t.Errorf("stop all: %v", out)
 	}
 }

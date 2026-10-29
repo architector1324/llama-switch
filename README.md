@@ -38,7 +38,7 @@ llmsw stop gemma4                      # or: llmsw stop --all
 `run` works with a model of any type, loading it first:
 
 ```bash
-llmsw run gemma4                                         # chat session; /bye to leave
+llmsw run gemma4                                         # chat session, /bye to leave
 llmsw run gemma4 "Say hi in three words"
 llmsw run gemma4 photo.png "What is in the picture?"     # images, audio, video
 git diff | llmsw run qwen3.6:35b --system "You write commit messages." "Write one"
@@ -50,9 +50,9 @@ cat ticket.txt | llmsw run clef:9b "Is this urgent?"
 ```
 
 - Files named in the prompt go along: an `llm` gets images, audio and video, an `sd` model edits the images. Piped text is sent as is.
-- Images and audio go to `-o`, to stdout in a pipe, or else to `MODEL-TIME.ext`; audio is played (`--no-play`). Code blocks of an answer are saved the same way (`--no-save`).
+- Images and audio go to `-o`, to stdout in a pipe, or else to `MODEL-TIME.ext`. Audio is played (`--no-play`). Code blocks of an answer are saved the same way (`--no-save`).
 - The dashboard's settings are flags: `--gpu`, `--ctx`, `--parallel`, `--preserve-thinking`, `--size`, `--hires`, `--frames`, `--single`.
-- Flags go anywhere after `run`; after `--`, everything is the prompt.
+- Flags go anywhere after `run`. After `--`, everything is the prompt.
 - `--verbose` prints timings to stderr, `llmsw run -h` lists every flag.
 - The server is found at `LLMSW_HOST`, `localhost:11435` by default.
 
@@ -81,7 +81,7 @@ The unit runs `llmsw serve` on `~/.config/llama-switch/config.yaml` with `--watc
 | Flag | Default | |
 | --- | --- | --- |
 | `-H`, `--host` | `localhost` | interface for the UI and the engines |
-| `-p`, `--port` | `11435` | UI port; engines get a free port each |
+| `-p`, `--port` | `11435` | UI port. Engines get a free port each |
 | `-c`, `--ctx` | `4096` | default context window, per slot |
 | `-np`, `--parallel` | `1` | default slots |
 | `-f`, `--config` | `config.yaml` | config file |
@@ -120,7 +120,7 @@ decision:
     q8_0: llama-server --host ${HOST} --port ${PORT} ${DEVICES} -c ${CTX} --parallel ${PARALLEL} -ngl 99 -m /path/to/Clef-Flash-Q8_0.gguf
 ```
 
-The first quant is the default and goes by the bare id (`qwen-3`); the others get a suffix (`qwen-3-q8_k_xl`). Ids are global: a duplicate in a later section is skipped.
+The first quant is the default and goes by the bare id (`qwen-3`). The others get a suffix (`qwen-3-q8_k_xl`). Ids are global. A duplicate in a later section is skipped.
 
 | Placeholder | Types | Becomes |
 | --- | --- | --- |
@@ -128,7 +128,7 @@ The first quant is the default and goes by the bare id (`qwen-3`); the others ge
 | `${CTX}` | `llm`, `decision` | context per slot times slots, for `-c` |
 | `${PARALLEL}` | `llm`, `decision` | the slot count |
 | `${DEVICES}` | all | the chosen card: `-dev Vulkan1`, `--backend vulkan --device 1` |
-| `${DEVICES:<flags>}` | all | the same, or `<flags>` with **All GPUs** or **Profile**; for `sd` it names the roles |
+| `${DEVICES:<flags>}` | all | the same, or `<flags>` with **All GPUs** or **Profile**. For `sd` it names the roles |
 | `${PRESERVE_THINK}` | `llm` | `--reasoning-preserve` or `--no-reasoning-preserve` |
 | `${FRAMES}` | `tts` | the frame cap |
 | `${WIDTH}`, `${HEIGHT}` | `sd` | the output size |
@@ -152,7 +152,7 @@ A request that names a `model` loads it first. One with no model goes to the run
 | --- | --- |
 | `GET /api/status[?model=]` | running instances and settings |
 | `POST /api/start` | start a model |
-| `POST /api/stop[?model=]` | stop one or all; the reply lists them |
+| `POST /api/stop[?model=]` | stop one or all. The reply lists them |
 | `POST /api/reset[?model=\|?kind=]` | settings back to defaults |
 | `POST /api/multi` | `{"multi": false}` to keep one model at a time |
 | `GET /api/logs[?model=]`, `POST /api/logs/clear[?model=]` | a model's log |

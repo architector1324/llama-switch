@@ -124,7 +124,7 @@ The first quant is the default and goes by the bare id (`qwen-3`). The others ge
 
 | Placeholder | Types | Becomes |
 | --- | --- | --- |
-| `${HOST}`, `${PORT}` | all | the interface and a free port |
+| `${HOST}`, `${PORT}` | all | the interface and the port: a free one, or the one set on the dashboard |
 | `${CTX}` | `llm`, `decision` | context per slot times slots, for `-c` |
 | `${PARALLEL}` | `llm`, `decision` | the slot count |
 | `${DEVICES}` | all | the chosen card: `-dev Vulkan1`, `--backend vulkan --device 1` |

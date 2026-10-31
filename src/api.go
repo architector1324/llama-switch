@@ -274,6 +274,11 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 	resp["selected_frames"] = orDefault(state.selectedFrames, state.defaultFrames)
 	resp["selected_res"] = selectedRes
 	resp["selected_hires"] = state.selectedHires
+	selectedPorts := map[string]int{}
+	for k, v := range state.selectedPorts {
+		selectedPorts[k] = v
+	}
+	resp["selected_ports"] = selectedPorts
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -402,6 +407,7 @@ func handleReset(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		resetSection(modelKind)
+		delete(state.selectedPorts, model)
 		if inst := state.instances[model]; inst != nil && inst.alive() {
 			targets = append(targets, target{inst.ModelKey, inst.Quant})
 		}
@@ -412,10 +418,16 @@ func handleReset(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		resetSection(kind)
+		for m := range state.selectedPorts {
+			if state.cfg.kind(m) == kind {
+				delete(state.selectedPorts, m)
+			}
+		}
 	default:
 		for _, name := range sections {
 			resetSection(name)
 		}
+		state.selectedPorts = map[string]int{}
 		for _, inst := range state.list() {
 			if inst.alive() {
 				targets = append(targets, target{inst.ModelKey, inst.Quant})
@@ -429,7 +441,7 @@ func handleReset(w http.ResponseWriter, r *http.Request) {
 	restarted := []string{}
 	for _, t := range targets {
 		key, quant := t.key, t.quant
-		hires, preserve, devices := false, false, ""
+		hires, preserve, devices, port := false, false, "", -1
 		_, err := startModelServer(StartRequest{
 			ModelKey:      &key,
 			Quantization:  &quant,
@@ -440,6 +452,7 @@ func handleReset(w http.ResponseWriter, r *http.Request) {
 			PreserveThink: &preserve,
 			Parallel:      &defParallel,
 			Devices:       &devices,
+			Port:          &port,
 		},
 			// Reset All restarts every model, so the first restart must not evict the rest.
 			model == "")

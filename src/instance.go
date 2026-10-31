@@ -72,6 +72,7 @@ type Instance struct {
 	Res           string
 	Hires         bool
 	PreserveThink bool
+	Command       string
 
 	cmd  *exec.Cmd
 	done chan struct{} // closed once the process has exited
@@ -182,6 +183,7 @@ func (i *Instance) toDict() map[string]any {
 		"res":            i.Res,
 		"hires":          i.Hires,
 		"preserve_think": i.PreserveThink,
+		"command":        i.Command,
 		"stats":          stats,
 	}
 }
@@ -211,6 +213,8 @@ type ServiceState struct {
 	selectedRes string
 	// Second sd pass. Sticky like selectedRes.
 	selectedHires bool
+	// Fixed ports by model; a model missing here gets a free port each start.
+	selectedPorts map[string]int
 	host          string
 	cfg           *ConfigManager
 }
@@ -221,6 +225,7 @@ var state = &ServiceState{
 	defaultCtx:      4096,
 	defaultParallel: 1,
 	selectedDevices: map[string]string{},
+	selectedPorts:   map[string]int{},
 	defaultFrames:   2048,
 	defaultRes:      "1024x1024",
 	host:            "0.0.0.0",
@@ -333,6 +338,29 @@ func onConfigChange() {
 	stopAll()
 }
 
+// A fixed port must be free, or held by a model this start stops: itself, or any with othersStay false.
+func checkPort(modelKey string, port int, othersStay bool) error {
+	state.mu.Lock()
+	var holder *Instance
+	for _, i := range state.list() {
+		if i.Port == port && i.alive() {
+			holder = i
+		}
+	}
+	state.mu.Unlock()
+	switch {
+	case holder == nil:
+		l, err := net.Listen("tcp4", ":"+strconv.Itoa(port))
+		if err != nil {
+			return badValue(fmt.Sprintf("Port %d is in use", port))
+		}
+		l.Close()
+	case holder.ModelKey != modelKey && othersStay:
+		return badValue(fmt.Sprintf("Port %d is taken by %s", port, holder.label()))
+	}
+	return nil
+}
+
 func findFreePort() (int, error) {
 	l, err := net.Listen("tcp4", ":0")
 	if err != nil {
@@ -359,6 +387,7 @@ type StartRequest struct {
 	PreserveThink *bool   `json:"preserve_think"`
 	Parallel      *int    `json:"parallel"`
 	Devices       *string `json:"devices"`
+	Port          *int    `json:"port"`
 }
 
 type StartResult struct {
@@ -480,6 +509,8 @@ func startModelServer(req StartRequest, replaceOnly bool) (StartResult, error) {
 	selPreserve := state.selectedPreserveThink
 	selParallel, defParallel := state.selectedParallel, state.defaultParallel
 	selDevices := state.selectedDevices[kind]
+	selPort := state.selectedPorts[modelKey]
+	multi := state.multi
 	host := state.host
 	state.mu.Unlock()
 
@@ -572,9 +603,24 @@ func startModelServer(req StartRequest, replaceOnly bool) (StartResult, error) {
 		devices = strings.Join(picked, ",")
 	}
 
-	port, err := findFreePort()
-	if err != nil {
-		return StartResult{}, err
+	// -1 asks for a free port each start; a fixed one stays with the model.
+	fixedPort := selPort
+	if req.Port != nil {
+		if p := *req.Port; p != -1 && (p < 1 || p > 65535) {
+			return StartResult{}, badValue(fmt.Sprintf("Port must be -1 or 1..65535, got %d", p))
+		}
+		fixedPort = max(*req.Port, 0)
+	}
+	port := fixedPort
+	if port > 0 {
+		if err := checkPort(modelKey, port, multi || replaceOnly); err != nil {
+			return StartResult{}, err
+		}
+	} else {
+		var err error
+		if port, err = findFreePort(); err != nil {
+			return StartResult{}, err
+		}
 	}
 
 	cmdStr := expandProfile(cmdTemplate, profileValues{
@@ -600,9 +646,6 @@ func startModelServer(req StartRequest, replaceOnly bool) (StartResult, error) {
 	}
 
 	// Multi-model off: a start clears the board; on: only the same model is replaced.
-	state.mu.Lock()
-	multi := state.multi
-	state.mu.Unlock()
 	if multi || replaceOnly {
 		stopInstance(modelKey)
 	} else {
@@ -615,6 +658,7 @@ func startModelServer(req StartRequest, replaceOnly bool) (StartResult, error) {
 		Kind:     kind,
 		Port:     port,
 		Devices:  devices,
+		Command:  cmdStr,
 		stats:    newStats(),
 	}
 	// Only llm and decision models have a context window.
@@ -636,6 +680,11 @@ func startModelServer(req StartRequest, replaceOnly bool) (StartResult, error) {
 
 	state.mu.Lock()
 	state.selectedDevices[kind] = devices
+	if fixedPort > 0 {
+		state.selectedPorts[modelKey] = fixedPort
+	} else {
+		delete(state.selectedPorts, modelKey)
+	}
 	if kind == "llm" {
 		state.selectedCtx = ctx
 		state.selectedPreserveThink = preserveThink

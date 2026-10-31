@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -84,6 +85,7 @@ func resetState() {
 	state.defaultRes, state.selectedRes = "1024x1024", ""
 	state.selectedHires, state.selectedPreserveThink = false, false
 	state.selectedDevices = map[string]string{}
+	state.selectedPorts = map[string]int{}
 	state.host = "127.0.0.1"
 	state.mu.Unlock()
 
@@ -477,6 +479,8 @@ func TestStartRejectsBadSettings(t *testing.T) {
 		{map[string]any{"model_key": "zeta", "parallel": 65}, 404, "Parallel slots must be 1..64, got 65"},
 		{map[string]any{"model_key": "zeta", "devices": "Vulkan9, te=Vulkan0"}, 404, "Unknown device(s): Vulkan9; available: Vulkan0, Vulkan1"},
 		{map[string]any{"model_key": "zeta", "devices": "Vulkan0;reboot"}, 404, "Unknown device(s): Vulkan0;reboot; available: Vulkan0, Vulkan1"},
+		{map[string]any{"model_key": "zeta", "port": 0}, 404, "Port must be -1 or 1..65535, got 0"},
+		{map[string]any{"model_key": "zeta", "port": 70000}, 404, "Port must be -1 or 1..65535, got 70000"},
 		{map[string]any{"model_key": "nope"}, 404, "Model not found in config"},
 		{map[string]any{"model_key": "zeta", "quantization": "q1"}, 404, "Quantization q1 not found for model zeta"},
 		{map[string]any{"ctx": 4096}, 422, "Field required: model_key"},
@@ -491,6 +495,55 @@ func TestStartRejectsBadSettings(t *testing.T) {
 	}
 	if got := h.running(); len(got) != 0 {
 		t.Errorf("a rejected start left %v running", got)
+	}
+}
+
+func TestStartTakesAFixedPort(t *testing.T) {
+	h := newHarness(t)
+	port, err := findFreePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := h.start(map[string]any{"model_key": "zeta", "port": port})
+	inst := h.instance("zeta")
+	if res["port"] != float64(port) || inst["port"] != float64(port) || inst["command"] != res["command"] ||
+		!strings.Contains(res["command"].(string), fmt.Sprintf("--port %d", port)) {
+		t.Errorf("start on %d: %v, instance port %v, command %v", port, res, inst["port"], inst["command"])
+	}
+
+	// It stays with the model through a restart.
+	h.start(map[string]any{"model_key": "zeta", "ctx": 2048})
+	if got := h.instance("zeta")["port"]; got != float64(port) {
+		t.Errorf("restarted on %v, want %d", got, port)
+	}
+	if ports := h.status()["selected_ports"].(map[string]any); ports["zeta"] != float64(port) {
+		t.Errorf("selected_ports %v", ports)
+	}
+
+	l, err := net.Listen("tcp4", ":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	busy := l.Addr().(*net.TCPAddr).Port
+	for p, want := range map[int]string{
+		port: fmt.Sprintf("Port %d is taken by zeta:q4", port),
+		busy: fmt.Sprintf("Port %d is in use", busy),
+	} {
+		if code, out := h.call("POST", "/api/start", map[string]any{"model_key": "voice", "port": p}); code != 404 || detail(out) != want {
+			t.Errorf("voice on %d: %d %q, want %q", p, code, detail(out), want)
+		}
+	}
+
+	// -1 and a reset both go back to a free port each start.
+	h.start(map[string]any{"model_key": "zeta", "port": -1})
+	if ports := h.status()["selected_ports"].(map[string]any); len(ports) != 0 {
+		t.Errorf("-1 kept %v", ports)
+	}
+	h.start(map[string]any{"model_key": "zeta", "port": port})
+	h.ok("POST", "/api/reset?model=zeta", nil)
+	if ports := h.status()["selected_ports"].(map[string]any); len(ports) != 0 {
+		t.Errorf("reset kept %v", ports)
 	}
 }
 

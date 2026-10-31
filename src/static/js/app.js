@@ -48,6 +48,23 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     framesInput.addEventListener('input', () => { framesInputPristine = false; });
 
+    const portInput = document.getElementById('port-input');
+    portInput.addEventListener('keypress', function (e) {
+        if (e.key === 'Enter') {
+            applyPortChange();
+        }
+    });
+    portInput.addEventListener('input', () => { portInputPristine = false; });
+
+    // Folded or not, as it was left.
+    const settings = document.getElementById('settings');
+    try {
+        if (localStorage.getItem('settingsOpen') === 'false') settings.open = false;
+    } catch (e) {}
+    settings.addEventListener('toggle', () => {
+        try { localStorage.setItem('settingsOpen', settings.open); } catch (e) {}
+    });
+
     // --- Theme Logic ---
     const themeBtn = document.getElementById('theme-toggle');
     const html = document.documentElement;
@@ -78,6 +95,9 @@ let framesInputPristine = true;
 let parallelInputPristine = true;
 // Once touched, the device pickers are not overwritten by the status poll.
 let devicesInputPristine = true;
+let portInputPristine = true;
+// Ports are per model: the one whose port the field shows.
+let portFieldModel = null;
 // The model the dashboard shows; null means the open section's instance.
 let focusedModel = null;
 let instances = [];
@@ -100,6 +120,12 @@ function runningInstance() {
         return instances.find(i => i.model === focusedModel) || instances[0] || null;
     }
     return instanceFor(activeSection);
+}
+
+// The row picked in this section, loaded or not.
+function pickedModel() {
+    const kinds = (currentConfig && currentConfig.kinds) || {};
+    return focusedModel && kinds[focusedModel] === activeSection ? focusedModel : null;
 }
 
 // The tab's kind; on Running, the kind of the model shown.
@@ -392,6 +418,7 @@ function resetControlPristine() {
     framesInputPristine = true;
     preserveInputPristine = true;
     devicesInputPristine = true;
+    portInputPristine = true;
 }
 
 // Any row can be focused, so a model's settings can be set before Load.
@@ -445,6 +472,9 @@ async function loadModel(key, quantization = null) {
     // A launch flag, not a runtime one: it only takes effect on this load.
     const preserveInput = document.getElementById('preserve-think-input');
     const preserveThink = preserveInput ? preserveInput.checked : false;
+    // Per model, so only the model the field shows takes its value.
+    const portInput = document.getElementById('port-input');
+    const port = key === portFieldModel ? parseInt(portInput.value) : undefined;
     
     const kind = currentConfig && currentConfig.kinds ? currentConfig.kinds[key] : null;
     if (kind && kind !== activeSection && activeSection !== RUNNING) selectSection(kind);
@@ -456,7 +486,7 @@ async function loadModel(key, quantization = null) {
         const res = await fetch('/api/start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model_key: key, quantization: quantization, ctx: ctx, parallel: parallel, devices: devices, frames: frames, res: outputRes, hires: hires, preserve_think: preserveThink })
+            body: JSON.stringify({ model_key: key, quantization: quantization, ctx: ctx, parallel: parallel, devices: devices, frames: frames, res: outputRes, hires: hires, preserve_think: preserveThink, port: port })
         });
         
         if (!res.ok) {
@@ -618,6 +648,10 @@ async function applyResChange() {
     reloadCurrentModel();
 }
 
+async function applyPortChange() {
+    reloadCurrentModel();
+}
+
 // A reset restarts what it applies to, like any field change.
 async function postReset(query) {
     try {
@@ -636,9 +670,7 @@ async function postReset(query) {
 
 async function resetFocused() {
     const inst = runningInstance();
-    const kinds = (currentConfig && currentConfig.kinds) || {};
-    const picked = focusedModel && kinds[focusedModel] === activeSection ? focusedModel : null;
-    const key = inst ? inst.model : picked;
+    const key = inst ? inst.model : pickedModel();
     if (!key && activeSection === RUNNING) return; // nothing up, nothing to reset
     await postReset(key ? `?model=${encodeURIComponent(key)}` : `?kind=${encodeURIComponent(activeSection)}`);
 }
@@ -806,6 +838,24 @@ function updateStatusDisplay(status) {
         if (framesInput && document.activeElement !== framesInput) {
             framesInput.value = shownFrames;
         }
+    }
+
+    // -1 for a free port at each start.
+    const portInput = document.getElementById('port-input');
+    const portModel = inst ? inst.model : pickedModel();
+    if (portInput && document.activeElement !== portInput
+        && (portInputPristine || portModel !== portFieldModel)) {
+        portInput.value = (portModel && (status.selected_ports || {})[portModel]) || -1;
+        portFieldModel = portModel;
+        portInputPristine = true;
+    }
+
+    // Set only on change, so a selection made for copying survives the poll.
+    const commandLine = document.getElementById('command-line');
+    const command = (inst && inst.command) || '';
+    if (commandLine && commandLine.textContent !== command) {
+        commandLine.textContent = command;
+        commandLine.title = command;
     }
 
     const indicator = document.getElementById('global-status');
@@ -981,7 +1031,7 @@ function applyDashboardKind(kind) {
         ['stats-llm', 'stats-mem', 'mem-devices-row', 'stats-sd', 'stats-tts',
          'stats-decision', 'ctx-control', 'frames-control', 'res-control',
          'hires-control', 'parallel-control', 'devices-control',
-         'sd-devices-control', 'preserve-think-control'].forEach(id => {
+         'sd-devices-control', 'preserve-think-control', 'settings'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.style.display = 'none';
         });
@@ -1010,6 +1060,7 @@ function applyDashboardKind(kind) {
     const devicesControl = document.getElementById('devices-control');
     const sdDevicesControl = document.getElementById('sd-devices-control');
     const preserveControl = document.getElementById('preserve-think-control');
+    const settings = document.getElementById('settings');
 
     if (llmStats) llmStats.style.display = notLlm ? 'none' : '';
     if (memStats) memStats.style.display = (notLlm && !isDecision) ? 'none' : '';
@@ -1026,6 +1077,7 @@ function applyDashboardKind(kind) {
     if (resControl) resControl.style.display = isSd ? '' : 'none';
     if (hiresControl) hiresControl.style.display = isSd ? '' : 'none';
     if (preserveControl) preserveControl.style.display = notLlm ? 'none' : '';
+    if (settings) settings.style.display = '';
 }
 
 function updateActiveModel(status) {

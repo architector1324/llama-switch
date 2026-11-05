@@ -73,6 +73,8 @@ document.addEventListener('DOMContentLoaded', () => {
         try { localStorage.setItem('settingsOpen', settings.open); } catch (e) {}
     });
 
+    setupDashboardResize();
+
     // --- Theme Logic ---
     const themeBtn = document.getElementById('theme-toggle');
     const html = document.documentElement;
@@ -418,6 +420,42 @@ function renderModelGroup(list, models, modelKeys, sectionName) {
         `;
         list.appendChild(item);
     });
+}
+
+// Dragging the dashboard's bottom edge caps its height; down to the content's own height or a double-click lifts the cap.
+function setupDashboardResize() {
+    const panel = document.querySelector('.controls-panel');
+    const grip = document.getElementById('dashboard-resizer');
+    const header = panel.querySelector('.panel-header');
+    const grid = panel.querySelector('.dashboard-grid');
+    const apply = h => { panel.style.maxHeight = h ? h + 'px' : ''; };
+    const save = h => {
+        try {
+            if (h) localStorage.setItem('dashboardHeight', h);
+            else localStorage.removeItem('dashboardHeight');
+        } catch (e) {}
+    };
+    try { apply(parseInt(localStorage.getItem('dashboardHeight')) || 0); } catch (e) {}
+
+    let startY = 0, startH = 0;
+    grip.addEventListener('pointerdown', e => {
+        startY = e.clientY;
+        startH = panel.offsetHeight;
+        grip.setPointerCapture(e.pointerId);
+        grip.classList.add('dragging');
+        e.preventDefault();
+    });
+    grip.addEventListener('pointermove', e => {
+        if (!grip.hasPointerCapture(e.pointerId)) return;
+        const natural = header.offsetHeight + grid.scrollHeight + 2;
+        const h = Math.max(header.offsetHeight + 60, Math.round(startH + e.clientY - startY));
+        apply(h >= natural ? 0 : h);
+    });
+    grip.addEventListener('lostpointercapture', () => {
+        grip.classList.remove('dragging');
+        save(parseInt(panel.style.maxHeight) || 0);
+    });
+    grip.addEventListener('dblclick', () => { apply(0); save(0); });
 }
 
 // A new focus refills the fields, even ones typed in.

@@ -51,9 +51,9 @@ cat ticket.txt | llmsw run clef:9b "Is this urgent?"
 
 - Files named in the prompt go along: an `llm` gets images, audio and video, an `sd` model edits the images. Piped text is sent as is.
 - Images and audio go to `-o`, to stdout in a pipe, or else to `MODEL-TIME.ext`. Audio is played (`--no-play`). Code blocks of an answer are saved the same way (`--no-save`).
-- The dashboard's settings are flags: `--gpu`, `--ctx`, `--parallel`, `--preserve-thinking`, `--reasoning-budget`, `--size`, `--hires`, `--frames`, `--single`.
+- The dashboard's settings are flags: `--gpu`, `--ctx`, `--parallel`, `--preserve-thinking`, `--budget`, `--size`, `--hires`, `--frames`, `--single`.
 - Flags go anywhere after `run`. After `--`, everything is the prompt.
-- `--verbose` prints timings to stderr, `llmsw run -h` lists every flag.
+- `--verbose` prints timings to stderr, `llmsw run -h` lists every flag with its short name.
 - The server is found at `LLMSW_HOST`, `localhost:11435` by default.
 
 Fish completion knows the models, each type's flags, the cards and the sizes:

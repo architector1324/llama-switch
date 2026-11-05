@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Llama Switch</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=25">
+    <link rel="stylesheet" href="/static/css/style.css?v=26">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body class="dark-theme">
@@ -301,14 +301,15 @@
                                 <div class="status-row">
                                     <span id="status-text">Stopped</span>
                                 </div>
-                                <a id="webui-btn" href="#" target="_blank" class="btn btn-primary btn-sm" style="display: none;">Open WebUI</a>
+                                <div class="status-actions">
+                                    <a id="webui-btn" href="#" target="_blank" class="btn btn-primary btn-sm" style="display: none;">Open WebUI</a>
+                                    <button id="command-btn" class="btn btn-outline btn-sm" onclick="openCommand()" style="display: none;" title="The command line the model was started with">Command</button>
+                                </div>
                             </div>
                         </div>
                     </div>
                     <div class="panel-resizer" id="dashboard-resizer" title="Drag to resize. Double-click to fit the content."></div>
                 </div>
-
-                <div class="command-line" id="command-line"></div>
 
                 <div class="panel logs-panel">
                     <div class="panel-header">
@@ -326,6 +327,16 @@
             </section>
         </main>
     </div>
-    <script src="/static/js/app.js?v=46"></script>
+    <dialog id="command-dialog" class="command-dialog">
+        <div class="panel-header">
+            <h2>Command<span class="panel-subject" id="command-owner"></span></h2>
+            <div class="actions actions-row">
+                <button id="copy-command-btn" class="btn btn-outline btn-sm" onclick="copyCommand()">Copy</button>
+                <button class="btn btn-outline btn-sm" onclick="document.getElementById('command-dialog').close()">Close</button>
+            </div>
+        </div>
+        <pre id="command-text" class="command-text"></pre>
+    </dialog>
+    <script src="/static/js/app.js?v=47"></script>
 </body>
 </html>

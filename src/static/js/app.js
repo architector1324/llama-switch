@@ -75,6 +75,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     setupDashboardResize();
 
+    // A click on the backdrop closes the command, as Esc does.
+    const commandDialog = document.getElementById('command-dialog');
+    commandDialog.addEventListener('click', e => {
+        if (e.target === commandDialog) commandDialog.close();
+    });
+
     // --- Theme Logic ---
     const themeBtn = document.getElementById('theme-toggle');
     const html = document.documentElement;
@@ -914,12 +920,15 @@ function updateStatusDisplay(status) {
     }
 
     // Set only on change, so a selection made for copying survives the poll.
-    const commandLine = document.getElementById('command-line');
     const command = (inst && inst.command) || '';
-    if (commandLine && commandLine.textContent !== command) {
-        commandLine.textContent = command;
-        commandLine.title = command;
+    const commandText = document.getElementById('command-text');
+    if (commandText.textContent !== command) {
+        commandText.textContent = command;
+        document.getElementById('command-owner').textContent = inst ? `· ${inst.label}` : '';
     }
+    document.getElementById('command-btn').style.display = command ? '' : 'none';
+    const commandDialog = document.getElementById('command-dialog');
+    if (!command && commandDialog.open) commandDialog.close();
 
     const indicator = document.getElementById('global-status');
     const statusText = document.getElementById('status-text');
@@ -1219,6 +1228,49 @@ function escapeHtml(text) {
         .replace(/'/g, "&#039;");
 }
 
+function openCommand() {
+    document.getElementById('command-dialog').showModal();
+}
+
+async function copyCommand() {
+    const dialog = document.getElementById('command-dialog');
+    let ok = false;
+    try {
+        // Into the dialog: a modal leaves the rest of the page inert.
+        await copyText(document.getElementById('command-text').textContent, dialog);
+        ok = true;
+    } catch (e) {
+        console.error('Failed to copy the command:', e);
+    }
+    flashResult(document.getElementById('copy-command-btn'), ok);
+}
+
+// navigator.clipboard needs a secure origin, which plain http on the LAN is not.
+async function copyText(text, parent = document.body) {
+    if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return;
+    }
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.top = '-1000px';
+    parent.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, ta.value.length);
+    const ok = document.execCommand('copy');
+    parent.removeChild(ta);
+    if (!ok) throw new Error('copy refused');
+}
+
+function flashResult(btn, ok) {
+    if (!btn) return;
+    const before = btn.innerText;
+    btn.innerText = ok ? '✓' : '✗';
+    setTimeout(() => { btn.innerText = before; }, 1200);
+}
+
 async function copyLogs() {
     const btn = document.getElementById('copy-logs-btn');
     let ok = false;
@@ -1228,31 +1280,12 @@ async function copyLogs() {
             throw new Error('log belongs to another section');
         }
         const res = await fetch(`/api/logs?model=${encodeURIComponent(owner.model)}`);
-        const text = (await res.json()).join('\n');
-        // navigator.clipboard needs a secure origin, which plain http on the LAN is not.
-        if (navigator.clipboard && window.isSecureContext) {
-            await navigator.clipboard.writeText(text);
-        } else {
-            const ta = document.createElement('textarea');
-            ta.value = text;
-            ta.setAttribute('readonly', '');
-            ta.style.position = 'fixed';
-            ta.style.top = '-1000px';
-            document.body.appendChild(ta);
-            ta.select();
-            ta.setSelectionRange(0, ta.value.length);
-            document.execCommand('copy');
-            document.body.removeChild(ta);
-        }
+        await copyText((await res.json()).join('\n'));
         ok = true;
     } catch (e) {
         console.error('Failed to copy logs:', e);
     }
-    if (btn) {
-        const before = btn.innerText;
-        btn.innerText = ok ? '✓' : '✗';
-        setTimeout(() => { btn.innerText = before; }, 1200);
-    }
+    flashResult(btn, ok);
 }
 
 async function clearLogs() {

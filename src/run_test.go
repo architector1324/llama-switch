@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"image"
 	"image/png"
@@ -15,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -29,7 +31,7 @@ func TestCheckRunFlags(t *testing.T) {
 		want  string
 	}{
 		{[]string{"gpu", "single", "verbose"}, "sd", ""},
-		{[]string{"ctx", "parallel", "preserve-thinking", "reasoning-budget", "hide-thinking", "no-save"}, "llm", ""},
+		{[]string{"ctx", "parallel", "preserve-thinking", "budget", "hide-thinking", "no-save"}, "llm", ""},
 		{[]string{"ctx", "questions"}, "decision", ""},
 		{[]string{"size", "hires", "o"}, "sd", ""},
 		{[]string{"frames", "voice", "no-play"}, "tts", ""},
@@ -38,7 +40,7 @@ func TestCheckRunFlags(t *testing.T) {
 		{[]string{"frames"}, "music", "--frames is for tts models, and m is a music model"},
 		{[]string{"no-save"}, "sd", "--no-save is for llm models, and m is a sd model"},
 		{[]string{"preserve-thinking"}, "decision", "--preserve-thinking is for llm models, and m is a decision model"},
-		{[]string{"reasoning-budget"}, "sd", "--reasoning-budget is for llm models, and m is a sd model"},
+		{[]string{"budget"}, "sd", "--budget is for llm models, and m is a sd model"},
 	} {
 		set := map[string]bool{}
 		for _, f := range tc.flags {
@@ -76,6 +78,26 @@ func TestParseAnywhere(t *testing.T) {
 	}
 }
 
+func TestShortFlagsCountAsTheirLongNames(t *testing.T) {
+	var a runArgs
+	fs := runFlags(&a)
+	rest := parseAnywhere(fs, strings.Fields("Hi -b 0 --ctx 2048"))
+	if set := givenFlags(fs); !reflect.DeepEqual(set, map[string]bool{"budget": true, "ctx": true}) || a.settings.budget != 0 {
+		t.Errorf("%v: given %v, budget %d", rest, set, a.settings.budget)
+	}
+	fs = runFlags(&a)
+	fs.Parse(strings.Fields("-b 4096 -q m"))
+	if a.settings.budget != 4096 || !a.noPlay || !givenFlags(fs)["budget"] {
+		t.Errorf("before the model: budget %d, no-play %v", a.settings.budget, a.noPlay)
+	}
+	// Every long flag has one; a clash would have panicked in runFlags.
+	fs.VisitAll(func(f *flag.Flag) {
+		if _, ok := runShortFlags[f.Name]; !ok && len(f.Name) > 2 {
+			t.Errorf("--%s has no short name", f.Name)
+		}
+	})
+}
+
 func settings(flags map[string]any) runSettings {
 	s := runSettings{set: map[string]bool{}}
 	for name, v := range flags {
@@ -91,7 +113,7 @@ func settings(flags map[string]any) runSettings {
 			s.parallel = v.(int)
 		case "frames":
 			s.frames = v.(int)
-		case "reasoning-budget":
+		case "budget":
 			s.budget = v.(int)
 		case "preserve-thinking":
 			s.preserve = v.(bool)
@@ -125,7 +147,7 @@ func TestApplySettingsRestartsLikeTheDashboard(t *testing.T) {
 	}
 
 	// One setting changes, the rest are carried over.
-	applySettings(ctx, zeta, "q4", settings(map[string]any{"gpu": "Vulkan1", "preserve-thinking": true, "reasoning-budget": 0}))
+	applySettings(ctx, zeta, "q4", settings(map[string]any{"gpu": "Vulkan1", "preserve-thinking": true, "budget": 0}))
 	inst = h.waitReady("zeta")
 	if inst["pid"] == pid || inst["devices"] != "Vulkan1" || inst["ctx"] != 2048.0 ||
 		inst["parallel"] != 2.0 || inst["preserve_think"] != true || inst["reasoning_budget"] != 0.0 {

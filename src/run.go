@@ -73,9 +73,9 @@ terminal, or else to a new file in the current directory. So does each code
 block of an answer in a terminal, its extension from the block's language.
 
 The dashboard's settings are flags too: --gpu, --ctx, --parallel,
---preserve-thinking, --reasoning-budget, --size, --hires, --frames, --single.
-Given one, the model starts with it, as a change on the dashboard would restart
-it; whatever is not given stays as it was.
+--preserve-thinking, --budget, --size, --hires, --frames, --single. Given one,
+the model starts with it, as a change on the dashboard would restart it;
+whatever is not given stays as it was.
 
 Flags go before the model or anywhere after it, the prompt's words included;
 after --, every word is the prompt's.
@@ -90,7 +90,7 @@ var runFlagKinds = map[string][]string{
 	"ctx":               {"llm", "decision"},
 	"parallel":          {"llm", "decision"},
 	"preserve-thinking": {"llm"},
-	"reasoning-budget":  {"llm"},
+	"budget":            {"llm"},
 	"size":              {"sd"},
 	"image":             {"sd"},
 	"mask":              {"sd"},
@@ -103,6 +103,14 @@ var runFlagKinds = map[string][]string{
 	"duration":          {"music"},
 	"lyrics":            {"music"},
 	"questions":         {"decision"},
+}
+
+// The short names run takes besides the long ones.
+var runShortFlags = map[string]string{
+	"budget": "b", "ctx": "c", "duration": "d", "frames": "f", "gpu": "g", "hires": "hr",
+	"hide-thinking": "ht", "image": "i", "lyrics": "l", "mask": "m", "parallel": "np", "no-save": "ns",
+	"preserve-thinking": "pt", "no-play": "q", "questions": "qs", "size": "r", "system": "s",
+	"verbose": "v", "voice": "vo", "single": "x",
 }
 
 // Where run's flags land.
@@ -133,16 +141,24 @@ func runFlags(a *runArgs) *flag.FlagSet {
 	fs.IntVar(&s.ctx, "ctx", 0, "llm, decision: context window per slot")
 	fs.IntVar(&s.parallel, "parallel", 0, "llm, decision: parallel slots")
 	fs.BoolVar(&s.preserve, "preserve-thinking", false, "llm: feed earlier reasoning back into the prompt")
-	fs.IntVar(&s.budget, "reasoning-budget", 0, "llm: thinking tokens per answer, -1 for no limit, 0 for none")
+	fs.IntVar(&s.budget, "budget", 0, "llm: thinking tokens per answer, -1 for no limit, 0 for none")
 	fs.StringVar(&s.size, "size", "", "sd: output size, WIDTHxHEIGHT")
 	fs.BoolVar(&s.hires, "hires", false, "sd: hires fix")
 	fs.IntVar(&s.frames, "frames", 0, "tts: max frames")
 	fs.BoolVar(&s.single, "single", false, "turn Multi-model off before loading, so the model runs alone; --single=false turns it back on")
 	fs.Usage = func() {
 		fmt.Fprint(fs.Output(), runUsage)
-		printFlags(fs, nil)
+		printFlags(fs, runShortFlags)
 	}
+	addShortFlags(fs, runShortFlags)
 	return fs
+}
+
+// The flags given, a short one under its long name.
+func givenFlags(fs *flag.FlagSet) map[string]bool {
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[longFlag(fs, runShortFlags, f).Name] = true })
+	return set
 }
 
 func runCommand(args []string) {
@@ -157,8 +173,7 @@ func runCommand(args []string) {
 	rest := parseAnywhere(fs, fs.Args()[1:])
 	prompt := strings.Join(rest, " ")
 	s := a.settings
-	s.set = map[string]bool{}
-	fs.Visit(func(f *flag.Flag) { s.set[f.Name] = true })
+	s.set = givenFlags(fs)
 
 	server := serverURL()
 	entry, err := findModel(server, model)
@@ -334,7 +349,7 @@ func applySettings(ctx context.Context, opts runOptions, quant string, s runSett
 	if s.set["preserve-thinking"] {
 		want["preserve_think"] = s.preserve
 	}
-	if s.set["reasoning-budget"] {
+	if s.set["budget"] {
 		want["reasoning_budget"] = s.budget
 	}
 	if s.set["size"] {

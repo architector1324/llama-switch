@@ -71,7 +71,7 @@ func complete(server string, words []string, cur string) []string {
 	case "serve":
 		fs := serveFlags(&serveArgs{})
 		if _, f := positionals(fs, words, 1); f != nil {
-			return flagValues(server, f, cur)
+			return flagValues(server, longFlag(fs, serveShortFlags, f), cur)
 		}
 		return flagNames(fs, serveShortFlags, nil)
 	case "run":
@@ -86,7 +86,7 @@ func complete(server string, words []string, cur string) []string {
 		fs := stopFlags(new(bool))
 		args, _ := positionals(fs, words, 1)
 		if strings.HasPrefix(cur, "-") && len(args) == 0 {
-			return flagNames(fs, nil, nil)
+			return flagNames(fs, stopShortFlags, nil)
 		}
 		return runningNames(server, args)
 	case "completion":
@@ -114,7 +114,7 @@ func completeRun(server string, words []string, cur string) []string {
 
 	switch {
 	case pending != nil:
-		return flagValues(server, pending, cur)
+		return flagValues(server, longFlag(fs, runShortFlags, pending), cur)
 	case strings.HasPrefix(cur, "-") && !slices.Contains(words, "--"):
 		// --gpu=Vulkan1 is one word.
 		if name, value, ok := strings.Cut(strings.TrimLeft(cur, "-"), "="); ok {
@@ -122,6 +122,7 @@ func completeRun(server string, words []string, cur string) []string {
 			if f == nil {
 				return nil
 			}
+			f = longFlag(fs, runShortFlags, f)
 			prefix := cur[:len(cur)-len(value)]
 			var out []string
 			for _, v := range flagValues(server, f, value) {
@@ -132,7 +133,7 @@ func completeRun(server string, words []string, cur string) []string {
 			}
 			return out
 		}
-		return flagNames(fs, nil, fits)
+		return flagNames(fs, runShortFlags, fits)
 	case len(args) == 0:
 		return modelNames(server)
 	case kind == "llm" || kind == "sd" || kind == "stt":
@@ -196,7 +197,7 @@ func flagNames(fs *flag.FlagSet, short map[string]string, fits func(string) bool
 // What a flag's value can be, where there is a list of it.
 func flagValues(server string, f *flag.Flag, cur string) []string {
 	switch f.Name {
-	case "o", "image", "mask", "questions", "config", "f":
+	case "o", "image", "mask", "questions", "config":
 		return []string{filesMarker}
 	case "gpu":
 		return gpuValues(server, cur)

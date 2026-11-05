@@ -56,6 +56,9 @@ func TestComplete(t *testing.T) {
 		{"ls", "", func(c []string) bool { return fmt.Sprint(c) == fmt.Sprint(sections) }, "the types"},
 		{"serve", "-", func(c []string) bool { return has(names(c), "--host", "--config") && !has(names(c), "-H") }, "long names only"},
 		{"serve --config", "", func(c []string) bool { return fmt.Sprint(c) == "["+filesMarker+"]" }, "the config file"},
+		{"serve -f", "", func(c []string) bool { return fmt.Sprint(c) == "["+filesMarker+"]" }, "the config file by its short name"},
+		{"run img -r", "", func(c []string) bool { return has(c, "1024x1024\t1:1") }, "a short name completes as its long one"},
+		{"run voice -f", "", func(c []string) bool { return len(c) == 0 }, "run's -f is frames, not a file"},
 		{"completion", "", func(c []string) bool { return fmt.Sprint(c) == "[fish]" }, "the shells"},
 	} {
 		got := complete(h.url, strings.Fields(tc.words), tc.cur)

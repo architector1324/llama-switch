@@ -464,14 +464,17 @@ func deviceMemory(devices map[string]MemSlot) [][2]string {
 	return out
 }
 
+var stopShortFlags = map[string]string{"all": "a"}
+
 func stopFlags(all *bool) *flag.FlagSet {
 	fs := flag.NewFlagSet("stop", flag.ExitOnError)
 	fs.BoolVar(all, "all", false, "unload every model that is up")
 	fs.Usage = func() {
 		fmt.Fprint(fs.Output(), "Usage: llmsw stop MODEL...\n       llmsw stop --all\n\n"+
 			"Unload models, named as ps names them.\n\nFlags:\n")
-		printFlags(fs, nil)
+		printFlags(fs, stopShortFlags)
 	}
+	addShortFlags(fs, stopShortFlags)
 	return fs
 }
 

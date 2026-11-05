@@ -127,6 +127,23 @@ var serveShortFlags = map[string]string{
 	"host": "H", "port": "p", "ctx": "c", "parallel": "np", "config": "f", "watch": "w",
 }
 
+// Each short name as a second name for its long flag.
+func addShortFlags(fs *flag.FlagSet, short map[string]string) {
+	for long, s := range short {
+		fs.Var(fs.Lookup(long).Value, s, "same as --"+long)
+	}
+}
+
+// The long flag a short name stands for, or f itself.
+func longFlag(fs *flag.FlagSet, short map[string]string, f *flag.Flag) *flag.Flag {
+	for long, s := range short {
+		if s == f.Name {
+			return fs.Lookup(long)
+		}
+	}
+	return f
+}
+
 // flag.PrintDefaults with two dashes on long names, a short alias on its long name's line.
 func printFlags(fs *flag.FlagSet, short map[string]string) {
 	aliases := map[string]bool{}
@@ -182,10 +199,7 @@ func serveFlags(a *serveArgs) *flag.FlagSet {
 	fs.IntVar(&a.parallel, "parallel", 1, "default server slots per model")
 	fs.StringVar(&a.config, "config", "config.yaml", "config `file` path")
 	fs.BoolVar(&a.watch, "watch", false, "reload the config when it changes on disk")
-	for long, short := range serveShortFlags {
-		f := fs.Lookup(long)
-		fs.Var(f.Value, short, "same as --"+long)
-	}
+	addShortFlags(fs, serveShortFlags)
 	return fs
 }
 

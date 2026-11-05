@@ -19,6 +19,7 @@
     --danger-hover: #dc2626;
     
     --success: #10b981;     
+    --success-hover: #059669;
     
     --text-main: #f4f4f5;   
     --text-muted: #a1a1aa;  
@@ -840,6 +841,23 @@ input[type="number"]:focus {
     transform: translateY(-1px);
 }
 #webui-btn:active {
+    transform: translateY(0);
+}
+
+/* Green, as the command line itself is. */
+#command-btn {
+    background: var(--success);
+    color: white;
+    border: none;
+    font-size: 13px;
+    padding: 10px 16px;
+    box-shadow: 0 2px 4px rgba(16, 185, 129, 0.3);
+}
+#command-btn:hover {
+    background: var(--success-hover);
+    transform: translateY(-1px);
+}
+#command-btn:active {
     transform: translateY(0);
 }
 

@@ -51,7 +51,7 @@ cat ticket.txt | llmsw run clef:9b "Is this urgent?"
 
 - Файлы, названные в промпте, уходят вместе с ним: `llm` получает картинки, аудио и видео, `sd` правит картинки. Текст из пайпа уходит как есть.
 - Картинки и аудио пишутся в `-o`, в stdout в пайпе, иначе в `МОДЕЛЬ-ВРЕМЯ.ext`. Аудио проигрывается (`--no-play`). Блоки кода из ответа сохраняются так же (`--no-save`).
-- Настройки дашборда - тоже флаги: `--gpu`, `--ctx`, `--parallel`, `--preserve-thinking`, `--size`, `--hires`, `--frames`, `--single`.
+- Настройки дашборда - тоже флаги: `--gpu`, `--ctx`, `--parallel`, `--preserve-thinking`, `--reasoning-budget`, `--size`, `--hires`, `--frames`, `--single`.
 - Флаги ставятся где угодно после `run`. После `--` всё идёт в промпт.
 - `--verbose` печатает тайминги в stderr, `llmsw run -h` показывает все флаги.
 - Сервер ищется по `LLMSW_HOST`, по умолчанию `localhost:11435`.
@@ -130,6 +130,7 @@ decision:
 | `${DEVICES}` | все | выбранная карта: `-dev Vulkan1`, `--backend vulkan --device 1` |
 | `${DEVICES:<flags>}` | все | то же, или `<flags>` при **All GPUs** и **Profile**. Для `sd` задаёт роли |
 | `${PRESERVE_THINK}` | `llm` | `--reasoning-preserve` или `--no-reasoning-preserve` |
+| `${REASONING_BUDGET}` | `llm` | токены на размышление для `--reasoning-budget`: -1 без предела, 0 без размышлений |
 | `${FRAMES}` | `tts` | лимит кадров |
 | `${WIDTH}`, `${HEIGHT}` | `sd` | размер картинки |
 | `${HIRES}`, `${HIRES:<flags>}` | `sd` | `--hires` или `<flags>` при включённом Hires Fix, иначе ничего |

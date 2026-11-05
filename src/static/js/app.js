@@ -48,6 +48,14 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     framesInput.addEventListener('input', () => { framesInputPristine = false; });
 
+    const budgetInput = document.getElementById('budget-input');
+    budgetInput.addEventListener('keypress', function (e) {
+        if (e.key === 'Enter') {
+            applyBudgetChange();
+        }
+    });
+    budgetInput.addEventListener('input', () => { budgetInputPristine = false; });
+
     const portInput = document.getElementById('port-input');
     portInput.addEventListener('keypress', function (e) {
         if (e.key === 'Enter') {
@@ -93,6 +101,7 @@ let currentLoadingModel = null;
 let ctxInputPristine = true; // Field still mirrors the server, untouched
 let framesInputPristine = true;
 let parallelInputPristine = true;
+let budgetInputPristine = true;
 // Once touched, the device pickers are not overwritten by the status poll.
 let devicesInputPristine = true;
 let portInputPristine = true;
@@ -417,6 +426,7 @@ function resetControlPristine() {
     parallelInputPristine = true;
     framesInputPristine = true;
     preserveInputPristine = true;
+    budgetInputPristine = true;
     devicesInputPristine = true;
     portInputPristine = true;
 }
@@ -472,6 +482,9 @@ async function loadModel(key, quantization = null) {
     // A launch flag, not a runtime one: it only takes effect on this load.
     const preserveInput = document.getElementById('preserve-think-input');
     const preserveThink = preserveInput ? preserveInput.checked : false;
+    // Not "|| -1": 0 is a budget too.
+    const budgetValue = parseInt(document.getElementById('budget-input').value);
+    const budget = Number.isNaN(budgetValue) ? -1 : budgetValue;
     // Per model, so only the model the field shows takes its value.
     const portInput = document.getElementById('port-input');
     const port = key === portFieldModel ? parseInt(portInput.value) : undefined;
@@ -486,7 +499,7 @@ async function loadModel(key, quantization = null) {
         const res = await fetch('/api/start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model_key: key, quantization: quantization, ctx: ctx, parallel: parallel, devices: devices, frames: frames, res: outputRes, hires: hires, preserve_think: preserveThink, port: port })
+            body: JSON.stringify({ model_key: key, quantization: quantization, ctx: ctx, parallel: parallel, devices: devices, frames: frames, res: outputRes, hires: hires, preserve_think: preserveThink, reasoning_budget: budget, port: port })
         });
         
         if (!res.ok) {
@@ -645,6 +658,10 @@ async function applyHiresChange() {
 }
 
 async function applyResChange() {
+    reloadCurrentModel();
+}
+
+async function applyBudgetChange() {
     reloadCurrentModel();
 }
 
@@ -813,6 +830,14 @@ function updateStatusDisplay(status) {
         if (preserveInput && document.activeElement !== preserveInput) {
             preserveInput.checked = shownPreserve;
             renderPreserveThinkState(preserveInput.checked);
+        }
+    }
+
+    if (budgetInputPristine) {
+        const budgetInput = document.getElementById('budget-input');
+        const shownBudget = inst ? inst.reasoning_budget : status.selected_reasoning_budget;
+        if (budgetInput && document.activeElement !== budgetInput && shownBudget !== undefined) {
+            budgetInput.value = shownBudget;
         }
     }
 
@@ -1031,7 +1056,7 @@ function applyDashboardKind(kind) {
         ['stats-llm', 'stats-mem', 'mem-devices-row', 'stats-sd', 'stats-tts',
          'stats-decision', 'ctx-control', 'frames-control', 'res-control',
          'hires-control', 'parallel-control', 'devices-control',
-         'sd-devices-control', 'preserve-think-control', 'settings'].forEach(id => {
+         'sd-devices-control', 'preserve-think-control', 'budget-control', 'settings'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.style.display = 'none';
         });
@@ -1060,6 +1085,7 @@ function applyDashboardKind(kind) {
     const devicesControl = document.getElementById('devices-control');
     const sdDevicesControl = document.getElementById('sd-devices-control');
     const preserveControl = document.getElementById('preserve-think-control');
+    const budgetControl = document.getElementById('budget-control');
     const settings = document.getElementById('settings');
 
     if (llmStats) llmStats.style.display = notLlm ? 'none' : '';
@@ -1077,6 +1103,7 @@ function applyDashboardKind(kind) {
     if (resControl) resControl.style.display = isSd ? '' : 'none';
     if (hiresControl) hiresControl.style.display = isSd ? '' : 'none';
     if (preserveControl) preserveControl.style.display = notLlm ? 'none' : '';
+    if (budgetControl) budgetControl.style.display = notLlm ? 'none' : '';
     if (settings) settings.style.display = '';
 }
 

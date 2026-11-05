@@ -271,6 +271,7 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 	// A map, not one value: the picker shows the choice for the open tab.
 	resp["selected_devices"] = selectedDevices
 	resp["selected_preserve_think"] = state.selectedPreserveThink
+	resp["selected_reasoning_budget"] = state.selectedReasoningBudget
 	resp["selected_frames"] = orDefault(state.selectedFrames, state.defaultFrames)
 	resp["selected_res"] = selectedRes
 	resp["selected_hires"] = state.selectedHires
@@ -378,6 +379,7 @@ func resetSection(kind string) {
 		state.selectedCtx = 0
 		state.selectedParallel = 0
 		state.selectedPreserveThink = false
+		state.selectedReasoningBudget = -1
 	case "sd":
 		state.selectedRes = ""
 		state.selectedHires = false
@@ -441,18 +443,19 @@ func handleReset(w http.ResponseWriter, r *http.Request) {
 	restarted := []string{}
 	for _, t := range targets {
 		key, quant := t.key, t.quant
-		hires, preserve, devices, port := false, false, "", -1
+		hires, preserve, devices, port, budget := false, false, "", -1, -1
 		_, err := startModelServer(StartRequest{
-			ModelKey:      &key,
-			Quantization:  &quant,
-			Ctx:           &defCtx,
-			Frames:        &defFrames,
-			Res:           &defRes,
-			Hires:         &hires,
-			PreserveThink: &preserve,
-			Parallel:      &defParallel,
-			Devices:       &devices,
-			Port:          &port,
+			ModelKey:        &key,
+			Quantization:    &quant,
+			Ctx:             &defCtx,
+			Frames:          &defFrames,
+			Res:             &defRes,
+			Hires:           &hires,
+			PreserveThink:   &preserve,
+			ReasoningBudget: &budget,
+			Parallel:        &defParallel,
+			Devices:         &devices,
+			Port:            &port,
 		},
 			// Reset All restarts every model, so the first restart must not evict the rest.
 			model == "")

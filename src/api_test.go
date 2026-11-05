@@ -32,7 +32,7 @@ var testDevices = []Device{
 const testConfigTemplate = `
 llm:
   zeta:
-    q4: {llm} --port ${PORT} --host ${HOST} ${DEVICES} -c ${CTX} --parallel ${PARALLEL} ${PRESERVE_THINK} --mmproj x
+    q4: {llm} --port ${PORT} --host ${HOST} ${DEVICES} -c ${CTX} --parallel ${PARALLEL} ${PRESERVE_THINK} --reasoning-budget ${REASONING_BUDGET} --mmproj x
     q8: {llm} --port ${PORT} --host ${HOST} -c ${CTX}
   eta:
     q1: {llm} --port ${PORT} --host ${HOST}
@@ -84,6 +84,7 @@ func resetState() {
 	state.defaultFrames, state.selectedFrames = 2048, 0
 	state.defaultRes, state.selectedRes = "1024x1024", ""
 	state.selectedHires, state.selectedPreserveThink = false, false
+	state.selectedReasoningBudget = -1
 	state.selectedDevices = map[string]string{}
 	state.selectedPorts = map[string]int{}
 	state.host = "127.0.0.1"
@@ -400,13 +401,13 @@ func TestStartReportsItsSettings(t *testing.T) {
 	h := newHarness(t)
 	res := h.ok("POST", "/api/start", map[string]any{
 		"model_key": "zeta", "quantization": "q4", "ctx": 2048, "parallel": 2,
-		"devices": " Vulkan1 ", "preserve_think": true,
+		"devices": " Vulkan1 ", "preserve_think": true, "reasoning_budget": 8192,
 	})
 	cmd := res["command"].(string)
 	port := int(res["port"].(float64))
 	for _, want := range []string{
 		fmt.Sprintf("--port %d", port), "--host 127.0.0.1", "-dev Vulkan1",
-		"-c 4096", "--parallel 2", "--reasoning-preserve",
+		"-c 4096", "--parallel 2", "--reasoning-preserve", "--reasoning-budget 8192",
 	} {
 		if !strings.Contains(cmd, want) {
 			t.Errorf("command %q lacks %q", cmd, want)
@@ -416,7 +417,7 @@ func TestStartReportsItsSettings(t *testing.T) {
 	inst := h.waitReady("zeta")
 	for field, want := range map[string]any{
 		"label": "zeta:q4", "kind": "llm", "ctx": 2048.0, "parallel": 2.0, "devices": "Vulkan1",
-		"preserve_think": true, "port": float64(port), "running": true,
+		"preserve_think": true, "reasoning_budget": 8192.0, "port": float64(port), "running": true,
 	} {
 		if inst[field] != want {
 			t.Errorf("%s = %v, want %v", field, inst[field], want)
@@ -437,7 +438,7 @@ func TestStartReportsItsSettings(t *testing.T) {
 
 	status := h.status()
 	if status["selected_ctx"] != 2048.0 || status["selected_parallel"] != 2.0 ||
-		status["selected_preserve_think"] != true {
+		status["selected_preserve_think"] != true || status["selected_reasoning_budget"] != 8192.0 {
 		t.Errorf("sticky choices not remembered: %v", status)
 	}
 	if devs := status["selected_devices"].(map[string]any); devs["llm"] != "Vulkan1" {
@@ -479,6 +480,7 @@ func TestStartRejectsBadSettings(t *testing.T) {
 		{map[string]any{"model_key": "zeta", "parallel": 65}, 404, "Parallel slots must be 1..64, got 65"},
 		{map[string]any{"model_key": "zeta", "devices": "Vulkan9, te=Vulkan0"}, 404, "Unknown device(s): Vulkan9; available: Vulkan0, Vulkan1"},
 		{map[string]any{"model_key": "zeta", "devices": "Vulkan0;reboot"}, 404, "Unknown device(s): Vulkan0;reboot; available: Vulkan0, Vulkan1"},
+		{map[string]any{"model_key": "zeta", "reasoning_budget": -2}, 404, "Reasoning budget must be -1 or more, got -2"},
 		{map[string]any{"model_key": "zeta", "port": 0}, 404, "Port must be -1 or 1..65535, got 0"},
 		{map[string]any{"model_key": "zeta", "port": 70000}, 404, "Port must be -1 or 1..65535, got 70000"},
 		{map[string]any{"model_key": "nope"}, 404, "Model not found in config"},
@@ -544,6 +546,26 @@ func TestStartTakesAFixedPort(t *testing.T) {
 	h.ok("POST", "/api/reset?model=zeta", nil)
 	if ports := h.status()["selected_ports"].(map[string]any); len(ports) != 0 {
 		t.Errorf("reset kept %v", ports)
+	}
+}
+
+func TestReasoningBudgetSticksUntilReset(t *testing.T) {
+	h := newHarness(t)
+	if b := h.status()["selected_reasoning_budget"]; b != -1.0 {
+		t.Errorf("budget at start %v, want -1", b)
+	}
+	// 0 is a budget, not a missing one.
+	res := h.start(map[string]any{"model_key": "zeta", "reasoning_budget": 0})
+	if !strings.Contains(res["command"].(string), "--reasoning-budget 0") {
+		t.Errorf("command %q", res["command"])
+	}
+	h.start(map[string]any{"model_key": "zeta", "ctx": 2048})
+	if b := h.instance("zeta")["reasoning_budget"]; b != 0.0 {
+		t.Errorf("a start without it changed the budget to %v", b)
+	}
+	h.ok("POST", "/api/reset?model=zeta", nil)
+	if b := h.waitReady("zeta")["reasoning_budget"]; b != -1.0 || h.status()["selected_reasoning_budget"] != -1.0 {
+		t.Errorf("after reset: %v, selected %v", b, h.status()["selected_reasoning_budget"])
 	}
 }
 

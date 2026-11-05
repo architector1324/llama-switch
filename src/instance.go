@@ -72,7 +72,9 @@ type Instance struct {
 	Res           string
 	Hires         bool
 	PreserveThink bool
-	Command       string
+	// Thinking tokens per answer: -1 unlimited, 0 none.
+	ReasoningBudget int
+	Command         string
 
 	cmd  *exec.Cmd
 	done chan struct{} // closed once the process has exited
@@ -167,24 +169,25 @@ func (i *Instance) toDict() map[string]any {
 	ready, active, stats := i.ready, i.active, i.stats
 	i.mu.Unlock()
 	return map[string]any{
-		"model":          i.ModelKey,
-		"quantization":   nullable(i.Quant),
-		"kind":           i.Kind,
-		"label":          i.label(),
-		"port":           port,
-		"pid":            pid,
-		"running":        alive,
-		"ready":          ready,
-		"active":         active,
-		"ctx":            i.Ctx,
-		"parallel":       i.Parallel,
-		"devices":        i.Devices,
-		"frames":         i.Frames,
-		"res":            i.Res,
-		"hires":          i.Hires,
-		"preserve_think": i.PreserveThink,
-		"command":        i.Command,
-		"stats":          stats,
+		"model":            i.ModelKey,
+		"quantization":     nullable(i.Quant),
+		"kind":             i.Kind,
+		"label":            i.label(),
+		"port":             port,
+		"pid":              pid,
+		"running":          alive,
+		"ready":            ready,
+		"active":           active,
+		"ctx":              i.Ctx,
+		"parallel":         i.Parallel,
+		"devices":          i.Devices,
+		"frames":           i.Frames,
+		"res":              i.Res,
+		"hires":            i.Hires,
+		"preserve_think":   i.PreserveThink,
+		"reasoning_budget": i.ReasoningBudget,
+		"command":          i.Command,
+		"stats":            stats,
 	}
 }
 
@@ -200,6 +203,8 @@ type ServiceState struct {
 	selectedCtx int
 	// Whether the next llm load keeps previous reasoning; sticky like selectedCtx.
 	selectedPreserveThink bool
+	// Thinking tokens for the next llm load: -1 unlimited, 0 none; sticky like selectedCtx.
+	selectedReasoningBudget int
 	// Slots per model; sticky like selectedCtx. The context is per slot, so more slots cost memory.
 	defaultParallel  int
 	selectedParallel int
@@ -220,15 +225,16 @@ type ServiceState struct {
 }
 
 var state = &ServiceState{
-	instances:       map[string]*Instance{},
-	multi:           true,
-	defaultCtx:      4096,
-	defaultParallel: 1,
-	selectedDevices: map[string]string{},
-	selectedPorts:   map[string]int{},
-	defaultFrames:   2048,
-	defaultRes:      "1024x1024",
-	host:            "0.0.0.0",
+	instances:               map[string]*Instance{},
+	multi:                   true,
+	defaultCtx:              4096,
+	defaultParallel:         1,
+	selectedDevices:         map[string]string{},
+	selectedPorts:           map[string]int{},
+	defaultFrames:           2048,
+	selectedReasoningBudget: -1,
+	defaultRes:              "1024x1024",
+	host:                    "0.0.0.0",
 }
 
 // Starts, stops and resets run one at a time; apart from state.mu so status polls never wait.
@@ -378,16 +384,17 @@ type badValue string
 func (e badValue) Error() string { return string(e) }
 
 type StartRequest struct {
-	ModelKey      *string `json:"model_key"`
-	Quantization  *string `json:"quantization"`
-	Ctx           *int    `json:"ctx"`
-	Frames        *int    `json:"frames"`
-	Res           *string `json:"res"`
-	Hires         *bool   `json:"hires"`
-	PreserveThink *bool   `json:"preserve_think"`
-	Parallel      *int    `json:"parallel"`
-	Devices       *string `json:"devices"`
-	Port          *int    `json:"port"`
+	ModelKey        *string `json:"model_key"`
+	Quantization    *string `json:"quantization"`
+	Ctx             *int    `json:"ctx"`
+	Frames          *int    `json:"frames"`
+	Res             *string `json:"res"`
+	Hires           *bool   `json:"hires"`
+	PreserveThink   *bool   `json:"preserve_think"`
+	ReasoningBudget *int    `json:"reasoning_budget"`
+	Parallel        *int    `json:"parallel"`
+	Devices         *string `json:"devices"`
+	Port            *int    `json:"port"`
 }
 
 type StartResult struct {
@@ -422,11 +429,11 @@ func replaceSubmatchFunc(re *regexp.Regexp, s string, fn func(groups []string) s
 
 // The values a profile's placeholders take for one start, already validated.
 type profileValues struct {
-	Kind, Host, Devices  string
-	Port, Ctx, Parallel  int
-	Frames               int
-	Width, Height        string
-	Hires, PreserveThink bool
+	Kind, Host, Devices     string
+	Port, Ctx, Parallel     int
+	Frames, ReasoningBudget int
+	Width, Height           string
+	Hires, PreserveThink    bool
 }
 
 // The command line a profile stands for, placeholders filled in.
@@ -459,6 +466,7 @@ func expandProfile(tmpl string, v profileValues) string {
 	cmd = strings.ReplaceAll(cmd, "${HEIGHT}", v.Height)
 	cmd = strings.ReplaceAll(cmd, "${HOST}", v.Host)
 	cmd = strings.ReplaceAll(cmd, "${PRESERVE_THINK}", preserveFlag)
+	cmd = strings.ReplaceAll(cmd, "${REASONING_BUDGET}", strconv.Itoa(v.ReasoningBudget))
 	cmd = strings.ReplaceAll(cmd, "${PARALLEL}", parallel)
 	// The draft model follows --device, so llm needs no second flag.
 	cmd = replaceSubmatchFunc(reDevices, cmd, func(g []string) string {
@@ -507,6 +515,7 @@ func startModelServer(req StartRequest, replaceOnly bool) (StartResult, error) {
 	selRes, defRes := state.selectedRes, state.defaultRes
 	selHires := state.selectedHires
 	selPreserve := state.selectedPreserveThink
+	selBudget := state.selectedReasoningBudget
 	selParallel, defParallel := state.selectedParallel, state.defaultParallel
 	selDevices := state.selectedDevices[kind]
 	selPort := state.selectedPorts[modelKey]
@@ -556,6 +565,15 @@ func startModelServer(req StartRequest, replaceOnly bool) (StartResult, error) {
 	preserveThink := selPreserve
 	if req.PreserveThink != nil {
 		preserveThink = *req.PreserveThink
+	}
+
+	// Same precedence as ctx. Goes straight onto a shell command line.
+	budget := selBudget
+	if req.ReasoningBudget != nil {
+		budget = *req.ReasoningBudget
+	}
+	if budget < -1 {
+		return StartResult{}, badValue(fmt.Sprintf("Reasoning budget must be -1 or more, got %d", budget))
 	}
 
 	// Same precedence as ctx. Goes straight onto a shell command line.
@@ -624,17 +642,18 @@ func startModelServer(req StartRequest, replaceOnly bool) (StartResult, error) {
 	}
 
 	cmdStr := expandProfile(cmdTemplate, profileValues{
-		Kind:          kind,
-		Host:          host,
-		Port:          port,
-		Ctx:           ctx,
-		Parallel:      parallel,
-		Frames:        frames,
-		Width:         width,
-		Height:        height,
-		Hires:         hires,
-		PreserveThink: preserveThink,
-		Devices:       devices,
+		Kind:            kind,
+		Host:            host,
+		Port:            port,
+		Ctx:             ctx,
+		Parallel:        parallel,
+		Frames:          frames,
+		Width:           width,
+		Height:          height,
+		Hires:           hires,
+		PreserveThink:   preserveThink,
+		ReasoningBudget: budget,
+		Devices:         devices,
 	})
 
 	fmt.Printf("Starting model %s on %s:%d with command: %s\n", modelKey, host, port, cmdStr)
@@ -676,6 +695,7 @@ func startModelServer(req StartRequest, replaceOnly bool) (StartResult, error) {
 	}
 	if kind == "llm" {
 		inst.PreserveThink = preserveThink
+		inst.ReasoningBudget = budget
 	}
 
 	state.mu.Lock()
@@ -688,6 +708,7 @@ func startModelServer(req StartRequest, replaceOnly bool) (StartResult, error) {
 	if kind == "llm" {
 		state.selectedCtx = ctx
 		state.selectedPreserveThink = preserveThink
+		state.selectedReasoningBudget = budget
 		state.selectedParallel = parallel
 	}
 	if kind == "tts" {

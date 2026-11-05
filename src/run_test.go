@@ -29,7 +29,7 @@ func TestCheckRunFlags(t *testing.T) {
 		want  string
 	}{
 		{[]string{"gpu", "single", "verbose"}, "sd", ""},
-		{[]string{"ctx", "parallel", "preserve-thinking", "hide-thinking", "no-save"}, "llm", ""},
+		{[]string{"ctx", "parallel", "preserve-thinking", "reasoning-budget", "hide-thinking", "no-save"}, "llm", ""},
 		{[]string{"ctx", "questions"}, "decision", ""},
 		{[]string{"size", "hires", "o"}, "sd", ""},
 		{[]string{"frames", "voice", "no-play"}, "tts", ""},
@@ -38,6 +38,7 @@ func TestCheckRunFlags(t *testing.T) {
 		{[]string{"frames"}, "music", "--frames is for tts models, and m is a music model"},
 		{[]string{"no-save"}, "sd", "--no-save is for llm models, and m is a sd model"},
 		{[]string{"preserve-thinking"}, "decision", "--preserve-thinking is for llm models, and m is a decision model"},
+		{[]string{"reasoning-budget"}, "sd", "--reasoning-budget is for llm models, and m is a sd model"},
 	} {
 		set := map[string]bool{}
 		for _, f := range tc.flags {
@@ -90,6 +91,8 @@ func settings(flags map[string]any) runSettings {
 			s.parallel = v.(int)
 		case "frames":
 			s.frames = v.(int)
+		case "reasoning-budget":
+			s.budget = v.(int)
 		case "preserve-thinking":
 			s.preserve = v.(bool)
 		case "hires":
@@ -122,10 +125,10 @@ func TestApplySettingsRestartsLikeTheDashboard(t *testing.T) {
 	}
 
 	// One setting changes, the rest are carried over.
-	applySettings(ctx, zeta, "q4", settings(map[string]any{"gpu": "Vulkan1", "preserve-thinking": true}))
+	applySettings(ctx, zeta, "q4", settings(map[string]any{"gpu": "Vulkan1", "preserve-thinking": true, "reasoning-budget": 0}))
 	inst = h.waitReady("zeta")
 	if inst["pid"] == pid || inst["devices"] != "Vulkan1" || inst["ctx"] != 2048.0 ||
-		inst["parallel"] != 2.0 || inst["preserve_think"] != true {
+		inst["parallel"] != 2.0 || inst["preserve_think"] != true || inst["reasoning_budget"] != 0.0 {
 		t.Errorf("after --gpu: %v", inst)
 	}
 	applySettings(ctx, zeta, "q4", settings(map[string]any{"gpu": "all"}))

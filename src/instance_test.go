@@ -24,6 +24,8 @@ func TestExpandProfile(t *testing.T) {
 		{"s --host ${HOST} --port ${PORT} -c ${CTX} --parallel ${PARALLEL} ${PRESERVE_THINK}", base,
 			"s --host 0.0.0.0 --port 4242 -c 8192 --parallel 2 --no-reasoning-preserve"},
 		{"s ${PRESERVE_THINK}", with(func(v *profileValues) { v.PreserveThink = true }), "s --reasoning-preserve"},
+		{"s --reasoning-budget ${REASONING_BUDGET}", with(func(v *profileValues) { v.ReasoningBudget = -1 }),
+			"s --reasoning-budget -1"},
 		{"s -W ${WIDTH} -H ${HEIGHT} --max-new ${FRAMES}", base, "s -W 832 -H 1216 --max-new 2048"},
 
 		// Hires: on puts the profile's own flags in, off removes the placeholder.

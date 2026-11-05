@@ -73,9 +73,9 @@ terminal, or else to a new file in the current directory. So does each code
 block of an answer in a terminal, its extension from the block's language.
 
 The dashboard's settings are flags too: --gpu, --ctx, --parallel,
---preserve-thinking, --size, --hires, --frames, --single. Given one, the model
-starts with it, as a change on the dashboard would restart it; whatever is not
-given stays as it was.
+--preserve-thinking, --reasoning-budget, --size, --hires, --frames, --single.
+Given one, the model starts with it, as a change on the dashboard would restart
+it; whatever is not given stays as it was.
 
 Flags go before the model or anywhere after it, the prompt's words included;
 after --, every word is the prompt's.
@@ -90,6 +90,7 @@ var runFlagKinds = map[string][]string{
 	"ctx":               {"llm", "decision"},
 	"parallel":          {"llm", "decision"},
 	"preserve-thinking": {"llm"},
+	"reasoning-budget":  {"llm"},
 	"size":              {"sd"},
 	"image":             {"sd"},
 	"mask":              {"sd"},
@@ -132,6 +133,7 @@ func runFlags(a *runArgs) *flag.FlagSet {
 	fs.IntVar(&s.ctx, "ctx", 0, "llm, decision: context window per slot")
 	fs.IntVar(&s.parallel, "parallel", 0, "llm, decision: parallel slots")
 	fs.BoolVar(&s.preserve, "preserve-thinking", false, "llm: feed earlier reasoning back into the prompt")
+	fs.IntVar(&s.budget, "reasoning-budget", 0, "llm: thinking tokens per answer, -1 for no limit, 0 for none")
 	fs.StringVar(&s.size, "size", "", "sd: output size, WIDTHxHEIGHT")
 	fs.BoolVar(&s.hires, "hires", false, "sd: hires fix")
 	fs.IntVar(&s.frames, "frames", 0, "tts: max frames")
@@ -300,6 +302,7 @@ type runSettings struct {
 	set                     map[string]bool // the flags given
 	gpu, size               string
 	ctx, parallel, frames   int
+	budget                  int // thinking tokens: -1 unlimited, 0 none
 	preserve, hires, single bool
 }
 
@@ -331,6 +334,9 @@ func applySettings(ctx context.Context, opts runOptions, quant string, s runSett
 	if s.set["preserve-thinking"] {
 		want["preserve_think"] = s.preserve
 	}
+	if s.set["reasoning-budget"] {
+		want["reasoning_budget"] = s.budget
+	}
 	if s.set["size"] {
 		want["res"] = strings.ToLower(strings.TrimSpace(s.size))
 	}
@@ -345,15 +351,16 @@ func applySettings(ctx context.Context, opts runOptions, quant string, s runSett
 	}
 
 	var up struct {
-		Running       bool   `json:"running"`
-		Quantization  string `json:"quantization"`
-		Devices       string `json:"devices"`
-		Ctx           int    `json:"ctx"`
-		Parallel      int    `json:"parallel"`
-		PreserveThink bool   `json:"preserve_think"`
-		Res           string `json:"res"`
-		Hires         bool   `json:"hires"`
-		Frames        int    `json:"frames"`
+		Running         bool   `json:"running"`
+		Quantization    string `json:"quantization"`
+		Devices         string `json:"devices"`
+		Ctx             int    `json:"ctx"`
+		Parallel        int    `json:"parallel"`
+		PreserveThink   bool   `json:"preserve_think"`
+		ReasoningBudget int    `json:"reasoning_budget"`
+		Res             string `json:"res"`
+		Hires           bool   `json:"hires"`
+		Frames          int    `json:"frames"`
 	}
 	if err := getJSON(opts.Server, "/api/status?model="+url.QueryEscape(opts.ModelKey), &up); err != nil {
 		return err
@@ -362,7 +369,7 @@ func applySettings(ctx context.Context, opts runOptions, quant string, s runSett
 	if up.Running && up.Quantization == quant {
 		current := map[string]any{
 			"devices": up.Devices, "ctx": up.Ctx, "parallel": up.Parallel,
-			"preserve_think": up.PreserveThink, "res": up.Res, "hires": up.Hires, "frames": up.Frames,
+			"preserve_think": up.PreserveThink, "reasoning_budget": up.ReasoningBudget, "res": up.Res, "hires": up.Hires, "frames": up.Frames,
 		}
 		same := true
 		for k, v := range want {

@@ -497,6 +497,7 @@ func TestPsShowsDetails(t *testing.T) {
   gpu:               default
   context:           2 x 4096
   preserve thinking: off
+  reasoning budget:  unlimited
   ctx usage:         73 / 4096
   prompt speed:      2355.46 tokens/s
   gen speed:         400.00 tokens/s

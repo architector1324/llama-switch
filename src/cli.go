@@ -118,23 +118,24 @@ type listedModel struct {
 }
 
 type runningInstance struct {
-	Model         string `json:"model"`
-	Quantization  string `json:"quantization"`
-	Kind          string `json:"kind"`
-	Label         string `json:"label"`
-	Devices       string `json:"devices"`
-	Port          int    `json:"port"`
-	PID           int    `json:"pid"`
-	Running       bool   `json:"running"`
-	Ready         bool   `json:"ready"`
-	Active        int    `json:"active"`
-	Ctx           int    `json:"ctx"`
-	Parallel      int    `json:"parallel"`
-	PreserveThink bool   `json:"preserve_think"`
-	Res           string `json:"res"`
-	Hires         bool   `json:"hires"`
-	Frames        int    `json:"frames"`
-	Stats         Stats  `json:"stats"`
+	Model           string `json:"model"`
+	Quantization    string `json:"quantization"`
+	Kind            string `json:"kind"`
+	Label           string `json:"label"`
+	Devices         string `json:"devices"`
+	Port            int    `json:"port"`
+	PID             int    `json:"pid"`
+	Running         bool   `json:"running"`
+	Ready           bool   `json:"ready"`
+	Active          int    `json:"active"`
+	Ctx             int    `json:"ctx"`
+	Parallel        int    `json:"parallel"`
+	PreserveThink   bool   `json:"preserve_think"`
+	ReasoningBudget int    `json:"reasoning_budget"`
+	Res             string `json:"res"`
+	Hires           bool   `json:"hires"`
+	Frames          int    `json:"frames"`
+	Stats           Stats  `json:"stats"`
 }
 
 func instanceKey(model, quant string) string { return model + "\x00" + quant }
@@ -188,6 +189,16 @@ func (i runningInstance) context() string {
 		return fmt.Sprintf("%d x %d", i.Parallel, i.Ctx)
 	}
 	return strconv.Itoa(i.Ctx)
+}
+
+func (i runningInstance) budget() string {
+	switch i.ReasoningBudget {
+	case -1:
+		return "unlimited"
+	case 0:
+		return "none"
+	}
+	return fmt.Sprintf("%d tokens", i.ReasoningBudget)
 }
 
 func fetchModels(server string) ([]listedModel, error) {
@@ -368,6 +379,7 @@ func printInstance(w io.Writer, name string, i runningInstance) {
 	case "llm":
 		line("context", i.context())
 		line("preserve thinking", onOff(i.PreserveThink))
+		line("reasoning budget", i.budget())
 		line("ctx usage", fmt.Sprintf("%d / %d", s.CtxUsed, i.Ctx))
 		line("prompt speed", figure(s.PromptSpeed > 0, "%.2f tokens/s", s.PromptSpeed))
 		line("gen speed", figure(s.GenSpeed > 0, "%.2f tokens/s", s.GenSpeed))

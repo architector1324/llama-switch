@@ -231,6 +231,14 @@
                                         </div>
                                     </div>
 
+                                    <div class="control-group compact-group" id="budget-control">
+                                        <label for="budget-input" title="Tokens the model may think before it answers. -1 is no limit, 0 is no thinking. Only profiles written with ${REASONING_BUDGET} follow it. Applied when the model loads, so changing it reloads it.">Reasoning Budget</label>
+                                        <div class="input-wrapper">
+                                            <input type="number" id="budget-input" value="-1" min="-1" step="1">
+                                            <button id="apply-budget-btn" class="btn btn-primary btn-sm" onclick="applyBudgetChange()">Apply</button>
+                                        </div>
+                                    </div>
+
                                     <div class="control-group compact-group" id="frames-control" style="display: none;">
                                         <label for="frames-input" title="Audio frames, 12.5 per second. 2048 caps a clip at about 164 s; longer text is cut off mid-sentence.">Max Frames</label>
                                         <div class="input-wrapper">
@@ -317,6 +325,6 @@
             </section>
         </main>
     </div>
-    <script src="/static/js/app.js?v=44"></script>
+    <script src="/static/js/app.js?v=45"></script>
 </body>
 </html>

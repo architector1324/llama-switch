@@ -2,7 +2,7 @@
 
 ![](./ref-dark.png)
 
-One dashboard and one OpenAI-compatible endpoint for local engines: [llama.cpp](https://github.com/ggerganov/llama.cpp), [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp), [qwentts.cpp](https://github.com/ServeurpersoCom/qwentts.cpp) and [audio.cpp](https://github.com/0xShug0/audio.cpp). Several models run at once, each on its own port and cards.
+One dashboard and one endpoint for local engines: [llama.cpp](https://github.com/ggerganov/llama.cpp), [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp), [trellis.cpp](https://github.com/pwilkin/trellis.cpp), [qwentts.cpp](https://github.com/ServeurpersoCom/qwentts.cpp) and [audio.cpp](https://github.com/0xShug0/audio.cpp). Several models run at once, each on its own port and cards.
 
 ## Installation
 
@@ -44,6 +44,7 @@ llmsw run gemma4 photo.png "What is in the picture?"     # images, audio, video
 git diff | llmsw run qwen3.6:35b --system "You write commit messages." "Write one"
 llmsw run z-image "a red cat on a windowsill" --size 1024x1024 > cat.png
 llmsw run mage-flow-edit cat.png "make the cat black"
+llmsw run pixal3d cat.png -o cat.glb
 llmsw run qwen3-tts "Hello there" --voice Kore
 llmsw run qwen3-asr meeting.mp3
 cat ticket.txt | llmsw run clef:9b "Is this urgent?"
@@ -65,6 +66,10 @@ llmsw completion fish > ~/.config/fish/completions/llmsw.fish
 ### Dashboard
 
 Open `http://localhost:11435`, pick a section and a model, set its GPU and context, click **Load**. Changing a field restarts the model with it. The microphone works only on `localhost`, since the page is served over plain http.
+
+For a 3D model, **Web UI** opens Trellis Studio: provide an image, generate, preview and download a GLB. Closing the page does not stop a generation already running.
+
+The adapted Trellis Studio source is in `trellis-studio/`; after changing it, run `npm ci` and `npm run build` there, then replace `src/static/studio` with the contents of `dist` before building llama-switch.
 
 ### Service
 
@@ -89,7 +94,7 @@ The unit runs `llmsw serve` on `~/.config/llama-switch/config.yaml` with `--watc
 
 ## Configuration
 
-Up to six sections, `llm`, `sd`, `tts`, `stt`, `music` and `decision`. Each model maps quants to command lines:
+Up to seven sections, `llm`, `sd`, `3d`, `tts`, `stt`, `music` and `decision`. Each model maps quants to command lines:
 
 ```yaml
 llm:
@@ -102,6 +107,10 @@ llm:
 sd:
   z-image:
     q8_0: sd-server -l ${HOST} --listen-port ${PORT} ${DEVICES:--backend diffusion=Vulkan1,te=Vulkan0,vae=Vulkan0} -W ${WIDTH} -H ${HEIGHT} ${HIRES:--hires --hires-denoising-strength 0.5} --diffusion-model /path/to/z_image_turbo-Q8_0.gguf --llm /path/to/Qwen3-4B-Q8_0.gguf --vae /path/to/ae.safetensors --steps 8 --cfg-scale 1.0
+
+3d:
+  pixal3d:
+    mixed: trellis-server --host ${HOST} --port ${PORT} ${DEVICES:--backend Vulkan --gpu 0} --models /path/to/pixal3d --model pixal3d --require-gpu
 
 tts:
   qwen3-tts:
@@ -144,6 +153,7 @@ A request that names a `model` loads it first. One with no model goes to the run
 | `/v1/models` | all |
 | `/v1/chat/completions`, `/v1/completions`, `/v1/responses` | `llm` |
 | `/v1/images/*`, `/sdapi/v1/*`, `/sdcpp/v1/*` | `sd` |
+| `/v1/3d/{model}/health`, `/v1/3d/{model}/generate` | `3d` |
 | `/v1/audio/speech`, `/v1/audio/voices` | `tts` |
 | `/v1/audio/transcriptions`, `/v1/audio/translations` | `stt`, or `llm` with llama-server's ASR |
 | `/v1/tasks/*` | `music` |

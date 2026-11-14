@@ -36,7 +36,7 @@ func TestCheckRunFlags(t *testing.T) {
 		{[]string{"size", "hires", "o"}, "sd", ""},
 		{[]string{"frames", "voice", "no-play"}, "tts", ""},
 		{[]string{"ctx"}, "sd", "--ctx is for llm and decision models, and m is a sd model"},
-		{[]string{"o"}, "llm", "-o is for sd, tts and music models, and m is a llm model"},
+		{[]string{"o"}, "llm", "-o is for sd, 3d, tts and music models, and m is a llm model"},
 		{[]string{"frames"}, "music", "--frames is for tts models, and m is a music model"},
 		{[]string{"no-save"}, "sd", "--no-save is for llm models, and m is a sd model"},
 		{[]string{"preserve-thinking"}, "decision", "--preserve-thinking is for llm models, and m is a decision model"},

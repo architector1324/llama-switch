@@ -328,7 +328,7 @@ async function fetchConfig() {
     }
 }
 
-const SECTION_LABELS = { llm: 'Language', sd: 'Image', tts: 'Speech', stt: 'Transcription', music: 'Music', decision: 'Decision' };
+const SECTION_LABELS = { llm: 'Language', sd: 'Image', '3d': '3D', tts: 'Speech', stt: 'Transcription', music: 'Music', decision: 'Decision' };
 
 // The dashboard follows the tab, not the running model.
 let activeSection = localStorage.getItem('activeSection') || 'llm';
@@ -1048,7 +1048,7 @@ function updateStatusDisplay(status) {
 
             const cnEl = document.getElementById('stat-dec-count');
             if (cnEl) cnEl.innerText = s.decision_count || 0;
-        } else if (inst.stats && inst.kind !== 'music' && inst.kind !== 'stt') {
+        } else if (inst.stats && inst.kind !== 'music' && inst.kind !== 'stt' && inst.kind !== '3d') {
             const used = inst.stats.ctx_used || 0;
             const limit = inst.ctx || 0;
 
@@ -1068,9 +1068,11 @@ function updateStatusDisplay(status) {
         // Decision models have no web page, so no button.
         if (inst.ready && inst.kind !== 'decision') {
             webuiBtn.style.display = 'inline-block';
-            // Straight to the engine's address: engine pages break under a prefix.
+            // The 3D studio uses the switch API; other UIs live on the engine port.
             const displayHost = (status.host === '0.0.0.0') ? window.location.hostname : status.host;
-            webuiBtn.href = `http://${displayHost}:${inst.port}`;
+            const quants = Object.keys((currentConfig.models || {})[inst.model] || {});
+            const modelID = inst.quantization && quants.length && inst.quantization !== quants[0] ? `${inst.model}-${inst.quantization}` : inst.model;
+            webuiBtn.href = inst.kind === '3d' ? `/studio/?model=${encodeURIComponent(modelID)}` : `http://${displayHost}:${inst.port}`;
         } else {
             webuiBtn.style.display = 'none';
         }
@@ -1117,7 +1119,7 @@ function applyDashboardKind(kind) {
     const isStt = kind === 'stt';
     // Decision models generate no tokens, but take -c, so the context control stays.
     const isDecision = kind === 'decision';
-    const notLlm = isSd || isTts || isStt || isMusic || isDecision;
+    const notLlm = isSd || isTts || isStt || isMusic || isDecision || kind === '3d';
     const llmStats = document.getElementById('stats-llm');
     const memStats = document.getElementById('stats-mem');
     const memDevices = document.getElementById('mem-devices-row');
@@ -1134,6 +1136,8 @@ function applyDashboardKind(kind) {
     const preserveControl = document.getElementById('preserve-think-control');
     const budgetControl = document.getElementById('budget-control');
     const settings = document.getElementById('settings');
+    const deviceSelect = document.getElementById('devices-input');
+    if (deviceSelect && deviceSelect.options.length) deviceSelect.options[0].textContent = kind === '3d' ? 'Profile' : 'All GPUs';
 
     if (llmStats) llmStats.style.display = notLlm ? 'none' : '';
     if (memStats) memStats.style.display = (notLlm && !isDecision) ? 'none' : '';

@@ -129,6 +129,12 @@ func deviceFlags(devices, kind, defaultText string) string {
 	if kind == "llm" || kind == "decision" {
 		return "-dev " + devices
 	}
+	if kind == "3d" {
+		if m := reDeviceSplit.FindStringSubmatch(devices); m != nil && strings.EqualFold(m[1], "Vulkan") {
+			return "--backend Vulkan --gpu " + m[2]
+		}
+		return defaultText
+	}
 
 	if kind == "sd" {
 		// sd assigns per module: role=card pairs override those roles, a bare card moves them all.

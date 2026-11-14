@@ -136,7 +136,7 @@ func completeRun(server string, words []string, cur string) []string {
 		return flagNames(fs, runShortFlags, fits)
 	case len(args) == 0:
 		return modelNames(server)
-	case kind == "llm" || kind == "sd" || kind == "stt":
+	case kind == "llm" || kind == "sd" || kind == "stt" || kind == "3d":
 		// The files a message names go along.
 		return []string{filesMarker}
 	}

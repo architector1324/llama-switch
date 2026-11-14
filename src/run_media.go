@@ -140,6 +140,49 @@ func freshName(model, ext string) string {
 	}
 }
 
+// Send one image to the selected 3D engine and save its GLB.
+func generate3D(ctx context.Context, opts runOptions, text string, out, errOut io.Writer) error {
+	rest, images, err := extractFiles(text, true, "image")
+	if err != nil {
+		return err
+	}
+	if len(images) != 1 || rest != "" {
+		return errors.New("3d needs one image file")
+	}
+	data, err := os.ReadFile(images[0])
+	if err != nil {
+		return err
+	}
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	part, err := mw.CreateFormFile("image", filepath.Base(images[0]))
+	if err != nil {
+		return err
+	}
+	if _, err = part.Write(data); err != nil {
+		return err
+	}
+	if err = mw.Close(); err != nil {
+		return err
+	}
+	spin := startSpinner(opts.Spinner, errOut, progress(opts))
+	defer spin.stop()
+	resp, err := post(ctx, opts.Server, "/v1/3d/"+url.PathEscape(opts.Model)+"/generate", mw.FormDataContentType(), body.Bytes())
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	glb, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if len(glb) == 0 {
+		return errors.New("the answer carries no model")
+	}
+	_, err = deliver(opts, glb, "glb", out, errOut)
+	return err
+}
+
 // What both image routes answer with.
 type imageAnswer struct {
 	Data []struct {

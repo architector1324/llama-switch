@@ -12,12 +12,13 @@ import (
 )
 
 // --- Config Manager ---
-var sections = []string{"llm", "sd", "tts", "stt", "music", "decision"}
+var sections = []string{"llm", "sd", "3d", "tts", "stt", "music", "decision"}
 
 // What each kind can do, published in /v1/models like ollama's "capabilities".
 var kindCapabilities = map[string][]string{
 	"llm":      {"completion", "chat"},
 	"sd":       {"image"},
+	"3d":       {"3d"},
 	"tts":      {"audio", "speech"},
 	"stt":      {"audio", "transcription"},
 	"music":    {"audio", "music"},
@@ -27,6 +28,7 @@ var kindCapabilities = map[string][]string{
 var kindEndpoint = map[string]string{
 	"llm": "/v1/chat/completions",
 	"sd":  "/v1/images/generations",
+	"3d":  "/v1/3d/{model}/generate",
 	"tts": "/v1/audio/speech",
 	"stt": "/v1/audio/transcriptions",
 	// audio.cpp generates music through its own task endpoint; /v1/audio/* is tts.

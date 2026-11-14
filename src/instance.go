@@ -618,6 +618,11 @@ func startModelServer(req StartRequest, replaceOnly bool) (StartResult, error) {
 			return StartResult{}, badValue(fmt.Sprintf(
 				"Unknown device(s): %s; available: %s", strings.Join(unknown, ", "), available))
 		}
+		if kind == "3d" {
+			if len(picked) != 1 || !strings.HasPrefix(picked[0], "Vulkan") || reDeviceSplit.FindStringSubmatch(picked[0]) == nil {
+				return StartResult{}, badValue("3d requires one Vulkan device")
+			}
+		}
 		devices = strings.Join(picked, ",")
 	}
 

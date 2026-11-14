@@ -63,6 +63,8 @@ func routes() http.Handler {
 	mux.HandleFunc("POST /v1/completions", proxyToLlama)
 	mux.HandleFunc("POST /v1/responses", proxyToLlama)
 	mux.HandleFunc("POST /v1/systemone", proxySystemOne)
+	mux.HandleFunc("GET /v1/3d/{model}/health", proxy3D)
+	mux.HandleFunc("POST /v1/3d/{model}/generate", proxy3D)
 	for _, method := range []string{"GET", "POST"} {
 		mux.HandleFunc(method+" /v1/images/{path...}", proxyImages)
 		mux.HandleFunc(method+" /sdapi/v1/{path...}", proxyImages)
@@ -73,9 +75,18 @@ func routes() http.Handler {
 		mux.HandleFunc(method+" /v1/audio/{path...}", proxyAudio)
 	}
 
-	// Engine UIs are not republished: their absolute paths collide with ours.
+	// Trellis Studio uses the switch API; other engine UIs remain on their ports.
 
 	static, _ := fs.Sub(assets, "static")
+	studio, _ := fs.Sub(static, "studio")
+	studioFiles := http.StripPrefix("/studio", http.FileServerFS(studio))
+	mux.HandleFunc("GET /studio/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/studio/" && strings.HasSuffix(r.URL.Path, "/") {
+			http.NotFound(w, r)
+			return
+		}
+		studioFiles.ServeHTTP(w, r)
+	})
 	files := http.StripPrefix("/static", http.FileServerFS(static))
 	mux.HandleFunc("GET /static/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/") {

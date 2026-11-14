@@ -61,6 +61,7 @@ What a model does with its input depends on its type:
             in a terminal, the code blocks of the answer are saved to files
   sd        draws it into a PNG; image files named in it, or with --image,
             it edits instead
+  3d        turns one image file into a GLB model
   tts       says it, into a WAV it then plays
   music     composes from it, into a WAV it then plays
   stt       transcribes the recordings named, or the audio piped in
@@ -96,7 +97,7 @@ var runFlagKinds = map[string][]string{
 	"mask":              {"sd"},
 	"hires":             {"sd"},
 	"frames":            {"tts"},
-	"o":                 {"sd", "tts", "music"},
+	"o":                 {"sd", "3d", "tts", "music"},
 	"no-play":           {"tts", "music"},
 	"no-save":           {"llm"},
 	"voice":             {"tts"},
@@ -127,7 +128,7 @@ func runFlags(a *runArgs) *flag.FlagSet {
 	fs.BoolVar(&a.hide, "hide-thinking", false, "llm: leave the reasoning out of the answer")
 	fs.StringVar(&a.system, "system", "", "llm: the system prompt")
 	fs.BoolVar(&a.verbose, "verbose", false, "print timings and counts after each result")
-	fs.StringVar(&a.output, "o", "", "sd, tts, music: write the result to this `file`")
+	fs.StringVar(&a.output, "o", "", "sd, 3d, tts, music: write the result to this `file`")
 	fs.BoolVar(&a.noPlay, "no-play", false, "tts, music: save the audio without playing it")
 	fs.BoolVar(&a.noSave, "no-save", false, "llm: leave the code blocks of the answer unsaved")
 	fs.StringVar(&a.voice, "voice", "", "tts: the voice to speak with")
@@ -439,6 +440,11 @@ type runTask struct {
 
 func newRunTask(opts runOptions, out, errOut io.Writer) runTask {
 	switch opts.Kind {
+	case "3d":
+		return runTask{
+			turn: func(ctx context.Context, text string) error { return generate3D(ctx, opts, text, out, errOut) },
+			hint: "Each message is the path of an image to turn into a 3D model.",
+		}
 	case "sd":
 		return runTask{
 			turn: func(ctx context.Context, text string) error { return generateImage(ctx, opts, text, out, errOut) },

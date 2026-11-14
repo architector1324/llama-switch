@@ -136,6 +136,28 @@ func fakeHandler(kind string, args []string) http.Handler {
 		}
 
 		switch r.URL.Path {
+		case "/health":
+			if kind == "3d" {
+				fmt.Fprint(w, "ok")
+				return
+			}
+			send(echo)
+
+		case "/generate":
+			if kind == "3d" {
+				if !bytes.Contains(body, []byte("fake input image")) {
+					http.Error(w, "missing image", http.StatusBadRequest)
+					return
+				}
+				if r.Header.Get("X-Test-Slow") != "" {
+					time.Sleep(700 * time.Millisecond)
+				}
+				w.Header().Set("Content-Type", "model/gltf-binary")
+				fmt.Fprint(w, "glTF fake model")
+				return
+			}
+			send(echo)
+
 		case "/slots":
 			send([]map[string]any{{
 				"id": 0, "n_ctx": 8192, "n_prompt_tokens": 42, "is_processing": working.Load() > 0,

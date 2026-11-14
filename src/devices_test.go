@@ -58,6 +58,8 @@ func TestDeviceFlags(t *testing.T) {
 		{"Vulkan1", "llm", "", "-dev Vulkan1"},
 		{"Vulkan0,Vulkan1", "llm", "", "-dev Vulkan0,Vulkan1"},
 		{"Vulkan1", "decision", "", "-dev Vulkan1"},
+		{"Vulkan1", "3d", "--backend Vulkan --gpu 0", "--backend Vulkan --gpu 1"},
+		{"", "3d", "--backend Vulkan --gpu 0", "--backend Vulkan --gpu 0"},
 
 		// A bare card moves every role the profile names.
 		{"Vulkan1", "sd", sdDefault, "--backend diffusion=Vulkan1,te=Vulkan1,vae=Vulkan1"},

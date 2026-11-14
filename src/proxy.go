@@ -397,6 +397,47 @@ func proxyToCurrent(w http.ResponseWriter, r *http.Request, kind string, rewrite
 	forward(w, r, target, raw, rewrite)
 }
 
+// Trellis Studio and CLI requests identify their 3D model in the URL.
+func proxy3D(w http.ResponseWriter, r *http.Request) {
+	key, quant, err := resolveModel(r.PathValue("model"), "3d")
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	var inst *Instance
+	if r.Method == http.MethodGet {
+		inst = serving(key, quant)
+		if inst == nil || !inst.isReady() {
+			http.Error(w, "not ready", http.StatusServiceUnavailable)
+			return
+		}
+	} else {
+		inst, err = autoloadModel(key, quant)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		if err := awaitReady(r.Context(), inst); err != nil {
+			writeError(w, err)
+			return
+		}
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, newErr(http.StatusBadRequest, "Could not read the request body"))
+		return
+	}
+	path := "/health"
+	if r.Method == http.MethodPost {
+		path = "/generate"
+		defer inst.begin()()
+		// trellis-server cannot cancel a running generation on client disconnect.
+		r = r.Clone(context.WithoutCancel(r.Context()))
+	}
+	target := fmt.Sprintf("http://%s:%d%s", state.host, inst.Port, path)
+	forward(w, r, target, body, nil)
+}
+
 // System One API of the running decision model.
 func proxySystemOne(w http.ResponseWriter, r *http.Request) {
 	proxyToCurrent(w, r, "decision", nil, nil)
